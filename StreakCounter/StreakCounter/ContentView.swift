@@ -169,6 +169,8 @@ struct StreakCardView: View {
     let streak: Streak
     @ObservedObject var store: StreakStore
 
+    @State private var showCardSettings = false
+
     private var textColor: Color {
         streak.textColor.color
     }
@@ -184,29 +186,14 @@ struct StreakCardView: View {
 
                 Spacer()
 
-                colorPickerSwatch(label: "Card") {
-                    ColorPicker(
-                        "Card Color",
-                        selection: Binding(
-                            get: { streak.cardColor.color },
-                            set: { store.setCardColor($0, for: streak) }
-                        ),
-                        supportsOpacity: false
-                    )
-                    .labelsHidden()
+                Button {
+                    showCardSettings = true
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                        .foregroundColor(textColor.opacity(0.8))
                 }
-
-                colorPickerSwatch(label: "Text") {
-                    ColorPicker(
-                        "Text Color",
-                        selection: Binding(
-                            get: { streak.textColor.color },
-                            set: { store.setTextColor($0, for: streak) }
-                        ),
-                        supportsOpacity: false
-                    )
-                    .labelsHidden()
-                }
+                .buttonStyle(.plain)
             }
 
             HStack(spacing: 16) {
@@ -257,6 +244,9 @@ struct StreakCardView: View {
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.06), radius: 3, x: 0, y: 1)
+        .sheet(isPresented: $showCardSettings) {
+            StreakCardSettingsSheet(streakID: streak.id, store: store)
+        }
     }
 
     @ViewBuilder
@@ -274,18 +264,191 @@ struct StreakCardView: View {
                 .foregroundColor(textColor.opacity(0.7))
         }
     }
+}
+
+// MARK: - Per-card settings sheet
+
+struct StreakCardSettingsSheet: View {
+
+    let streakID: UUID
+    @ObservedObject var store: StreakStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var nameDraft: String = ""
+    @State private var showDeleteConfirm = false
+
+    private var streak: Streak? {
+        store.streaks.first(where: { $0.id == streakID })
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let streak = streak {
+                    Section("Name") {
+                        TextField("Goal name", text: $nameDraft)
+                            .onSubmit(saveName)
+                    }
+
+                    Section("Card color") {
+                        cardColorTemplatesRow(streak: streak)
+                        ColorPicker(
+                            "Custom card color",
+                            selection: Binding(
+                                get: { streak.cardColor.color },
+                                set: { store.setCardColor($0, for: streak) }
+                            ),
+                            supportsOpacity: false
+                        )
+                    }
+
+                    Section("Text color") {
+                        textColorTemplatesRow(streak: streak)
+                        ColorPicker(
+                            "Custom text color",
+                            selection: Binding(
+                                get: { streak.textColor.color },
+                                set: { store.setTextColor($0, for: streak) }
+                            ),
+                            supportsOpacity: false
+                        )
+                    }
+
+                    Section {
+                        Button(role: .destructive) {
+                            showDeleteConfirm = true
+                        } label: {
+                            Label("Delete streak", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Card Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        saveName()
+                        dismiss()
+                    }
+                    .bold()
+                }
+            }
+            .onAppear {
+                nameDraft = streak?.name ?? ""
+            }
+            .confirmationDialog(
+                "Delete this streak?",
+                isPresented: $showDeleteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    if let s = streak { store.deleteStreak(s) }
+                    dismiss()
+                }
+            } message: {
+                Text("This will permanently remove the streak and its history.")
+            }
+        }
+    }
+
+    private func saveName() {
+        guard let s = streak else { return }
+        let trimmed = nameDraft.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != s.name else { return }
+        store.renameStreak(s, to: trimmed)
+    }
 
     @ViewBuilder
-    private func colorPickerSwatch<Content: View>(
-        label: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(spacing: 2) {
-            content()
-            Text(label)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(textColor.opacity(0.65))
+    private func cardColorTemplatesRow(streak: Streak) -> some View {
+        ColorTemplateRow(
+            colors: cardColorTemplates,
+            selected: streak.cardColor.color
+        ) { color in
+            store.setCardColor(color, for: streak)
         }
+    }
+
+    @ViewBuilder
+    private func textColorTemplatesRow(streak: Streak) -> some View {
+        ColorTemplateRow(
+            colors: textColorTemplates,
+            selected: streak.textColor.color
+        ) { color in
+            store.setTextColor(color, for: streak)
+        }
+    }
+
+    private var cardColorTemplates: [Color] {
+        [
+            .white,
+            Color(red: 1.0, green: 0.95, blue: 0.85),  // cream
+            Color(red: 0.86, green: 0.93, blue: 1.0),  // sky
+            Color(red: 0.88, green: 0.96, blue: 0.89), // mint
+            Color(red: 0.94, green: 0.90, blue: 0.99), // lavender
+            Color(red: 1.0, green: 0.88, blue: 0.86),  // peach
+            Color(red: 0.94, green: 0.94, blue: 0.94), // light gray
+            Color(red: 0.18, green: 0.20, blue: 0.24)  // dark slate
+        ]
+    }
+
+    private var textColorTemplates: [Color] {
+        [
+            .black,
+            .white,
+            Color(red: 0.24, green: 0.27, blue: 0.30),
+            Color(red: 0.55, green: 0.55, blue: 0.58),
+            Color(red: 0.85, green: 0.20, blue: 0.27),
+            Color(red: 0.05, green: 0.45, blue: 0.80),
+            Color(red: 0.18, green: 0.55, blue: 0.34),
+            Color(red: 0.50, green: 0.30, blue: 0.65)
+        ]
+    }
+}
+
+// MARK: - Color template row
+
+struct ColorTemplateRow: View {
+
+    let colors: [Color]
+    let selected: Color
+    var onSelect: (Color) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(Array(colors.enumerated()), id: \.offset) { _, color in
+                    Button {
+                        onSelect(color)
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(color)
+                                .frame(width: 32, height: 32)
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.gray.opacity(0.35), lineWidth: 1)
+                                )
+                            if matches(color, selected) {
+                                Circle()
+                                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                                    .frame(width: 38, height: 38)
+                            }
+                        }
+                        .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func matches(_ a: Color, _ b: Color) -> Bool {
+        CodableColor(a) == CodableColor(b)
     }
 }
 
@@ -349,8 +512,14 @@ struct SettingsSheet: View {
                 }
 
                 Section("Background Color") {
+                    ColorTemplateRow(
+                        colors: backgroundTemplates,
+                        selected: store.backgroundColor.color
+                    ) { color in
+                        store.setBackgroundColor(color)
+                    }
                     ColorPicker(
-                        "Background color",
+                        "Custom color",
                         selection: Binding(
                             get: { store.backgroundColor.color },
                             set: { store.setBackgroundColor($0) }
@@ -395,6 +564,19 @@ struct SettingsSheet: View {
                 }
             }
         }
+    }
+
+    private var backgroundTemplates: [Color] {
+        [
+            CodableColor.appBackground.color,
+            .white,
+            Color(red: 0.86, green: 0.93, blue: 1.0),  // sky
+            Color(red: 0.88, green: 0.96, blue: 0.89), // mint
+            Color(red: 0.94, green: 0.90, blue: 0.99), // lavender
+            Color(red: 1.0, green: 0.88, blue: 0.86),  // peach
+            Color(red: 0.94, green: 0.94, blue: 0.94), // light gray
+            Color(red: 0.18, green: 0.20, blue: 0.24)  // dark slate
+        ]
     }
 
     @ViewBuilder
