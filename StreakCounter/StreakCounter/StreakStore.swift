@@ -76,6 +76,29 @@ class StreakStore: ObservableObject {
         save()
     }
 
+    func clearStreakData(_ streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
+        streaks[index].completedDates = []
+        streaks[index].dayStatuses = [:]
+        streaks[index].startDate = Date()
+        for i in streaks[index].milestoneMessages.indices {
+            streaks[index].milestoneMessages[i].unlockedAt = nil
+        }
+        save()
+    }
+
+    func clearAllStreakData() {
+        for i in streaks.indices {
+            streaks[i].completedDates = []
+            streaks[i].dayStatuses = [:]
+            streaks[i].startDate = Date()
+            for j in streaks[i].milestoneMessages.indices {
+                streaks[i].milestoneMessages[j].unlockedAt = nil
+            }
+        }
+        save()
+    }
+
     func setStatus(_ status: DayStatus, for date: Date, on streak: Streak) {
 
         guard let index = streaks.firstIndex(where: {

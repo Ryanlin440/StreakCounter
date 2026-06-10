@@ -77,46 +77,34 @@ struct ContentView: View {
     // MARK: - Sections
 
     private var addGoalCard: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 8) {
+        HStack(spacing: 12) {
 
-                TextField(
-                    "",
-                    text: $newGoal,
-                    prompt: Text("New goal (e.g. Read 10 pages)")
-                        .foregroundColor(Color.gray.opacity(0.6))
-                )
-                .foregroundStyle(.gray)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-                .background(Color.gray.opacity(0.1))
-                .clipShape(Capsule())
-                .onSubmit(addGoal)
+            TextField(
+                "",
+                text: $newGoal,
+                prompt: Text("New goal (e.g. Read 10 pages)")
+                    .foregroundColor(Color.gray.opacity(0.6))
+            )
+            .font(.system(size: 17))
+            .foregroundStyle(.gray)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(Color.gray.opacity(0.1))
+            .clipShape(Capsule())
+            .onSubmit(addGoal)
 
-                Button(action: addGoal) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(Color.gray)
-                }
-                .disabled(newGoal.isEmpty)
+            Button(action: addGoal) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(newGoal.isEmpty ? Color.gray.opacity(0.5) : Color.accentColor)
             }
-
-            Button {
-                store.debugAdvanceDay()
-            } label: {
-                Label("Simulate Next Day", systemImage: "forward.fill")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-            }
-            .buttonStyle(.bordered)
-            .tint(.gray)
-            .controlSize(.small)
+            .disabled(newGoal.isEmpty)
         }
-        .padding(14)
+        .padding(16)
         .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .clipShape(RoundedRectangle(cornerRadius: 22))
         .overlay(
-            RoundedRectangle(cornerRadius: 18)
+            RoundedRectangle(cornerRadius: 22)
                 .stroke(Color.gray.opacity(0.25), lineWidth: 1)
         )
     }

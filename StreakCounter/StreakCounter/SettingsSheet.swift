@@ -14,6 +14,8 @@ struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var showClearAllConfirm = false
+    @State private var showClearAllFinalConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -98,6 +100,19 @@ struct SettingsSheet: View {
                 } footer: {
                     Text("The image is shown on top of the background color.")
                 }
+
+                Section {
+                    Button(role: .destructive) {
+                        showClearAllConfirm = true
+                    } label: {
+                        Label("Quick clear all data", systemImage: "arrow.counterclockwise")
+                    }
+                    .disabled(store.streaks.isEmpty)
+                } header: {
+                    Text("Data")
+                } footer: {
+                    Text("Resets progress on every streak and re-locks milestone messages. Streak names, notes, and colors are kept.")
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -112,6 +127,28 @@ struct SettingsSheet: View {
                         store.setBackgroundImage(data: data)
                     }
                 }
+            }
+            .confirmationDialog(
+                "Clear data for all \(store.streaks.count) streak\(store.streaks.count == 1 ? "" : "s")?",
+                isPresented: $showClearAllConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Continue", role: .destructive) {
+                    showClearAllFinalConfirm = true
+                }
+            } message: {
+                Text("Resets progress on every streak and re-locks any milestone messages.")
+            }
+            .alert(
+                "Are you sure?",
+                isPresented: $showClearAllFinalConfirm
+            ) {
+                Button("Cancel", role: .cancel) { }
+                Button("Clear all data", role: .destructive) {
+                    store.clearAllStreakData()
+                }
+            } message: {
+                Text("All progress will be erased. This cannot be undone.")
             }
         }
     }

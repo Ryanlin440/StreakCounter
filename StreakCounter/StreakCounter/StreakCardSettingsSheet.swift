@@ -16,6 +16,8 @@ struct StreakCardSettingsSheet: View {
     @State private var nameDraft: String = ""
     @State private var notesDraft: String = ""
     @State private var showDeleteConfirm = false
+    @State private var showFinalDeleteConfirm = false
+    @State private var showClearDataConfirm = false
     @State private var showAddMessage = false
     @State private var viewingMessage: MilestoneMessage?
 
@@ -103,6 +105,16 @@ struct StreakCardSettingsSheet: View {
 
                     Section {
                         Button(role: .destructive) {
+                            showClearDataConfirm = true
+                        } label: {
+                            Label("Quick clear data", systemImage: "arrow.counterclockwise")
+                        }
+                    } footer: {
+                        Text("Resets your progress on this streak. Keeps the name, notes, colors, and milestone messages.")
+                    }
+
+                    Section {
+                        Button(role: .destructive) {
                             showDeleteConfirm = true
                         } label: {
                             Label("Delete streak", systemImage: "trash")
@@ -142,16 +154,38 @@ struct StreakCardSettingsSheet: View {
                 )
             }
             .confirmationDialog(
-                "Delete this streak?",
+                "Delete \"\(streak?.name ?? "this streak")\"?",
                 isPresented: $showDeleteConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Delete", role: .destructive) {
+                Button("Continue", role: .destructive) {
+                    showFinalDeleteConfirm = true
+                }
+            } message: {
+                Text("This will permanently remove the streak, its history, and any milestone messages.")
+            }
+            .alert(
+                "Are you sure?",
+                isPresented: $showFinalDeleteConfirm
+            ) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete forever", role: .destructive) {
                     if let s = streak { store.deleteStreak(s) }
                     dismiss()
                 }
             } message: {
-                Text("This will permanently remove the streak and its history.")
+                Text("\"\(streak?.name ?? "This streak")\" will be permanently deleted. This cannot be undone.")
+            }
+            .confirmationDialog(
+                "Clear all data for this streak?",
+                isPresented: $showClearDataConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Clear data", role: .destructive) {
+                    if let s = streak { store.clearStreakData(s) }
+                }
+            } message: {
+                Text("Resets your progress and re-locks any milestone messages. Name, notes, and colors are kept.")
             }
         }
     }
