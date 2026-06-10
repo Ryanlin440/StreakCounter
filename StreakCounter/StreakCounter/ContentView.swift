@@ -28,8 +28,6 @@ struct ContentView: View {
 
                     VStack(spacing: 16) {
 
-                        addGoalCard
-
                         if store.streaks.isEmpty {
                             emptyState
                         } else {
@@ -39,13 +37,16 @@ struct ContentView: View {
                                 }
                             }
                         }
+
+                        addGoalCard
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
                     .padding(.bottom, 24)
                 }
             }
-            .navigationTitle("🔥 Streaks")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -81,9 +82,18 @@ struct ContentView: View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
 
-                TextField("New goal (e.g. Read 10 pages)", text: $newGoal)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(addGoal)
+                TextField(
+                    "",
+                    text: $newGoal,
+                    prompt: Text("New goal (e.g. Read 10 pages)")
+                        .foregroundColor(Color.gray.opacity(0.6))
+                )
+                .foregroundStyle(.gray)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .background(Color.gray.opacity(0.1))
+                .clipShape(Capsule())
+                .onSubmit(addGoal)
 
                 Button(action: addGoal) {
                     Image(systemName: "plus.circle.fill")
@@ -98,46 +108,42 @@ struct ContentView: View {
             } label: {
                 Label("Simulate Next Day", systemImage: "forward.fill")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.gray)
             }
             .buttonStyle(.bordered)
             .tint(.gray)
             .controlSize(.small)
         }
         .padding(14)
-        .background(neutralCardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 18)
                 .stroke(Color.gray.opacity(0.25), lineWidth: 1)
         )
     }
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "flame")
+            Image(systemName: "flame.fill")
                 .font(.largeTitle)
                 .foregroundStyle(.gray)
             Text("No streaks yet")
                 .font(.headline)
                 .foregroundColor(.primary)
-            Text("Add your first goal above to start a streak.")
+            Text("Add your first goal below to start a streak.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 32)
-        .background(neutralCardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 18)
                 .stroke(Color.gray.opacity(0.25), lineWidth: 1)
         )
-    }
-
-    private var neutralCardBackground: Color {
-        Color(red: 245/255, green: 245/255, blue: 247/255)
     }
 
     @ViewBuilder
@@ -175,13 +181,21 @@ struct StreakCardView: View {
         streak.textColor.color
     }
 
+    private var scale: CGFloat {
+        CGFloat(store.cardSize)
+    }
+
+    private var todayStatusForDisplay: DayStatus {
+        store.status(for: Date(), on: streak) ?? .neutral
+    }
+
     var body: some View {
 
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10 * scale) {
 
             HStack {
                 Text(streak.name)
-                    .font(.headline)
+                    .font(.system(size: 17 * scale, weight: .semibold))
                     .foregroundColor(textColor)
 
                 Spacer()
@@ -190,13 +204,13 @@ struct StreakCardView: View {
                     showCardSettings = true
                 } label: {
                     Image(systemName: "ellipsis.circle")
-                        .font(.title3)
+                        .font(.system(size: 20 * scale))
                         .foregroundColor(textColor.opacity(0.8))
                 }
                 .buttonStyle(.plain)
             }
 
-            HStack(spacing: 16) {
+            HStack(spacing: 16 * scale) {
                 statCounter(
                     value: store.currentStreak(for: streak),
                     title: "Current",
@@ -209,15 +223,16 @@ struct StreakCardView: View {
                 )
                 Spacer()
                 Text("Started \(streak.startDate.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.caption)
+                    .font(.system(size: 11 * scale))
                     .foregroundColor(textColor.opacity(0.7))
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 8 * scale) {
                 ForEach(DayStatus.allCases, id: \.self) { status in
                     StatusButton(
                         status: status,
-                        isSelected: store.status(for: Date(), on: streak) == status
+                        isSelected: todayStatusForDisplay == status,
+                        scale: scale
                     ) {
                         store.setStatus(status, for: Date(), on: streak)
                     }
@@ -227,16 +242,16 @@ struct StreakCardView: View {
                     StreakCalendarView(streakID: streak.id, store: store)
                 } label: {
                     Image(systemName: "calendar")
-                        .font(.title3)
+                        .font(.system(size: 18 * scale))
                         .foregroundColor(textColor)
-                        .padding(8)
+                        .padding(8 * scale)
                         .background(textColor.opacity(0.1))
                         .clipShape(Circle())
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(14 * scale)
         .background(streak.cardColor.color)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
@@ -252,15 +267,15 @@ struct StreakCardView: View {
     @ViewBuilder
     private func statCounter(value: Int, title: String, systemImage: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
+            HStack(spacing: 4 * scale) {
                 Image(systemName: systemImage)
-                    .font(.caption)
+                    .font(.system(size: 11 * scale))
                 Text("\(value)")
-                    .font(.title3.weight(.bold))
+                    .font(.system(size: 19 * scale, weight: .bold))
             }
             .foregroundColor(textColor)
             Text(title)
-                .font(.caption2)
+                .font(.system(size: 10 * scale))
                 .foregroundColor(textColor.opacity(0.7))
         }
     }
@@ -326,11 +341,8 @@ struct StreakCardSettingsSheet: View {
             .navigationTitle("Card Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button("Close") {
                         saveName()
                         dismiss()
                     }
@@ -458,16 +470,17 @@ struct StatusButton: View {
 
     let status: DayStatus
     let isSelected: Bool
+    var scale: CGFloat = 1.0
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: status.symbol)
-                .font(.body.weight(.bold))
+                .font(.system(size: 17 * scale, weight: .bold))
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(isSelected ? status.color : status.color.opacity(0.35))
+                .padding(.vertical, 8 * scale)
+                .background(isSelected ? Color.gray.opacity(0.5) : status.color)
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -508,6 +521,26 @@ struct SettingsSheet: View {
                             }
                         }
                         .disabled(auth.isWorking)
+                    }
+                }
+
+                Section("Card Size") {
+                    Slider(
+                        value: Binding(
+                            get: { store.cardSize },
+                            set: { store.setCardSize($0) }
+                        ),
+                        in: 0.7...1.5,
+                        step: 0.05
+                    )
+                    HStack {
+                        Text("Scale: \(String(format: "%.2fx", store.cardSize))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Reset to default") {
+                            store.setCardSize(StreakStore.defaultCardSize)
+                        }
                     }
                 }
 

@@ -14,13 +14,18 @@ class StreakStore: ObservableObject {
     @Published var streaks: [Streak] = []
     @Published var backgroundImageData: Data?
     @Published var backgroundColor: CodableColor = .appBackground
+    @Published var cardSize: Double = 1.0
+
+    static let defaultCardSize: Double = 1.0
 
     private let backgroundColorKey = "backgroundColor"
+    private let cardSizeKey = "cardSize"
 
     init() {
         load()
         loadBackgroundImage()
         loadBackgroundColor()
+        loadCardSize()
     }
 
     func addStreak(name: String) {
@@ -110,14 +115,21 @@ class StreakStore: ObservableObject {
     func currentStreak(for streak: Streak) -> Int {
 
         let calendar = Calendar.current
-        let doneDays = Set(streak.completedDates.map { calendar.startOfDay(for: $0) })
         let today = calendar.startOfDay(for: Date())
-        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: today) else { return 0 }
+        let todayStatus = streak.dayStatuses[Streak.dateKey(today)]
+
+        // Today explicitly marked as not done or neutral breaks the streak.
+        if todayStatus == .notDone || todayStatus == .neutral {
+            return 0
+        }
+
+        let doneDays = Set(streak.completedDates.map { calendar.startOfDay(for: $0) })
 
         var anchor: Date
         if doneDays.contains(today) {
             anchor = today
-        } else if doneDays.contains(yesterday) {
+        } else if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
+                  doneDays.contains(yesterday) {
             anchor = yesterday
         } else {
             return 0
@@ -232,6 +244,20 @@ class StreakStore: ObservableObject {
             return
         }
         backgroundColor = decoded
+    }
+
+    // MARK: - Card size
+
+    func setCardSize(_ size: Double) {
+        cardSize = size
+        UserDefaults.standard.set(size, forKey: cardSizeKey)
+    }
+
+    private func loadCardSize() {
+        let saved = UserDefaults.standard.double(forKey: cardSizeKey)
+        if saved > 0 {
+            cardSize = saved
+        }
     }
 
     // MARK: - Persistence
