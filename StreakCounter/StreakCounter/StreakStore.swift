@@ -54,6 +54,28 @@ class StreakStore: ObservableObject {
         save()
     }
 
+    func setNotes(_ notes: String, for streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
+        streaks[index].notes = notes
+        save()
+    }
+
+    func addMilestoneMessage(targetDays: Int, message: String, for streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let new = MilestoneMessage(targetDays: targetDays, message: trimmed)
+        streaks[index].milestoneMessages.append(new)
+        streaks[index].milestoneMessages.sort { $0.targetDays < $1.targetDays }
+        unlockMilestonesIfNeeded(at: index)
+        save()
+    }
+
+    func deleteMilestoneMessage(id: UUID, for streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
+        streaks[index].milestoneMessages.removeAll { $0.id == id }
+        save()
+    }
+
     func setStatus(_ status: DayStatus, for date: Date, on streak: Streak) {
 
         guard let index = streaks.firstIndex(where: {
@@ -77,7 +99,19 @@ class StreakStore: ObservableObject {
             }
         }
 
+        unlockMilestonesIfNeeded(at: index)
         save()
+    }
+
+    private func unlockMilestonesIfNeeded(at index: Int) {
+        let current = currentStreak(for: streaks[index])
+        let now = Date()
+        for i in streaks[index].milestoneMessages.indices {
+            if streaks[index].milestoneMessages[i].unlockedAt == nil,
+               current >= streaks[index].milestoneMessages[i].targetDays {
+                streaks[index].milestoneMessages[i].unlockedAt = now
+            }
+        }
     }
 
     func status(for date: Date, on streak: Streak) -> DayStatus? {
