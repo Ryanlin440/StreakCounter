@@ -35,6 +35,8 @@ struct StreakCalendarView: View {
             Spacer()
         }
         .padding(.vertical)
+        .frame(maxWidth: ContentView.phoneContentMaxWidth)
+        .frame(maxWidth: .infinity)
         .navigationTitle(streak?.name ?? "Streak")
     }
 

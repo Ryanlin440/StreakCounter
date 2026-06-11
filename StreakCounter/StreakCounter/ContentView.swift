@@ -9,6 +9,10 @@ import SwiftUI
 
 struct ContentView: View {
 
+    // Caps the main column so iPad / Mac / landscape iPhone match the
+    // portrait iPhone layout instead of stretching cards full-width.
+    static let phoneContentMaxWidth: CGFloat = 480
+
     @StateObject private var store = StreakStore()
     @EnvironmentObject private var auth: AuthService
 
@@ -41,6 +45,8 @@ struct ContentView: View {
                     .padding(.horizontal)
                     .padding(.top, 8)
                     .padding(.bottom, 24)
+                    .frame(maxWidth: ContentView.phoneContentMaxWidth)
+                    .frame(maxWidth: .infinity)
                 }
             }
             .navigationTitle("")
