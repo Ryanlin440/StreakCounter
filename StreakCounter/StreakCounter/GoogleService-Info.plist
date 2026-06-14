@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CLIENT_ID</key>
-	<string>6912626754-q8bs7m1jv3o6ksrlnpj34mlcb8f7h1k6.apps.googleusercontent.com</string>
+	<string>6912626754-ktpqc5t1dla10l2373c3ktm59biapmpp.apps.googleusercontent.com</string>
 	<key>REVERSED_CLIENT_ID</key>
-	<string>com.googleusercontent.apps.6912626754-q8bs7m1jv3o6ksrlnpj34mlcb8f7h1k6</string>
+	<string>com.googleusercontent.apps.6912626754-ktpqc5t1dla10l2373c3ktm59biapmpp</string>
 	<key>API_KEY</key>
 	<string>AIzaSyCWAuXfqhb467dmLH0qALmszidEnMIO-O0</string>
 	<key>GCM_SENDER_ID</key>
@@ -13,7 +13,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.ryanlin.StreakCounter</string>
+	<string>com.ryanlin.StreakCounter2</string>
 	<key>PROJECT_ID</key>
 	<string>streakcounter-a93a1</string>
 	<key>STORAGE_BUCKET</key>
@@ -29,6 +29,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:6912626754:ios:4352318f4c6741d060dddb</string>
+	<string>1:6912626754:ios:79b88195ee920e5d60dddb</string>
 </dict>
 </plist>
