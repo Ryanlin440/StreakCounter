@@ -54,13 +54,13 @@ struct ContentView: View {
 
                 flameMark
 
-                VStack(spacing: 8) {
+                VStack(spacing: 10) {
                     Text("StreakCounter")
-                        .font(.largeTitle.weight(.bold))
-                        .foregroundColor(.primary)
+                        .font(.system(size: 40, weight: .heavy))
+                        .foregroundColor(Color(red: 0.10, green: 0.11, blue: 0.14))
                     Text("Sign in to start your streaks and keep them in sync across every device.")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
+                        .font(.body.weight(.semibold))
+                        .foregroundColor(Color(red: 0.22, green: 0.24, blue: 0.28))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
                 }
@@ -90,8 +90,8 @@ struct ContentView: View {
                 .padding(.horizontal, 24)
 
                 Text("Your streaks are private to your Google account.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.footnote.weight(.medium))
+                    .foregroundColor(Color(red: 0.28, green: 0.30, blue: 0.34))
                     .padding(.bottom, 24)
             }
             .frame(maxWidth: ContentView.phoneContentMaxWidth)
