@@ -86,10 +86,6 @@ struct MilestoneMessageDetailSheet: View {
     @State private var showMailComposer = false
     @State private var showMailUnavailableAlert = false
 
-    private var canSendEmail: Bool {
-        MFMailComposeViewController.canSendMail() && (recipientEmail?.isEmpty == false)
-    }
-
     var body: some View {
         NavigationStack {
             ScrollView {

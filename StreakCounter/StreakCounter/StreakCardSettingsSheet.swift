@@ -138,6 +138,9 @@ struct StreakCardSettingsSheet: View {
                 nameDraft = streak?.name ?? ""
                 notesDraft = streak?.notes ?? ""
             }
+            .onChange(of: nameDraft) { _, _ in
+                saveName()
+            }
             .onChange(of: notesDraft) { _, _ in
                 saveNotes()
             }
