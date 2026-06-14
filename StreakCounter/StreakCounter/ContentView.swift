@@ -21,7 +21,128 @@ struct ContentView: View {
     @State private var flameGlow = false
 
     var body: some View {
+        Group {
+            if auth.user == nil {
+                signInGate
+            } else {
+                signedInRoot
+            }
+        }
+        .alert(
+            "Sign-in error",
+            isPresented: Binding(
+                get: { auth.errorMessage != nil },
+                set: { if !$0 { auth.errorMessage = nil } }
+            ),
+            actions: {
+                Button("OK", role: .cancel) { auth.errorMessage = nil }
+            },
+            message: {
+                Text(auth.errorMessage ?? "")
+            }
+        )
+    }
 
+    // MARK: - Sign-in gate
+
+    private var signInGate: some View {
+        ZStack {
+            backgroundView
+
+            VStack(spacing: 28) {
+                Spacer()
+
+                flameMark
+
+                VStack(spacing: 8) {
+                    Text("StreakCounter")
+                        .font(.largeTitle.weight(.bold))
+                        .foregroundColor(.primary)
+                    Text("Sign in to start your streaks and keep them in sync across every device.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                }
+
+                Spacer()
+
+                Button {
+                    Task { await auth.signInWithGoogle() }
+                } label: {
+                    HStack(spacing: 10) {
+                        GoogleGLogo(size: 20)
+                        Text(auth.isWorking ? "Signing in…" : "Sign in with Google")
+                            .font(.body.weight(.semibold))
+                            .foregroundColor(.primary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.white)
+                    .clipShape(Capsule())
+                    .overlay(
+                        Capsule().stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
+                }
+                .buttonStyle(.plain)
+                .disabled(auth.isWorking)
+                .padding(.horizontal, 32)
+
+                Text("Your streaks are private to your Google account.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 24)
+            }
+            .frame(maxWidth: ContentView.phoneContentMaxWidth)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var flameMark: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.orange.opacity(0.35),
+                            Color.orange.opacity(0.0)
+                        ],
+                        center: .center,
+                        startRadius: 4,
+                        endRadius: 130
+                    )
+                )
+                .frame(width: 260, height: 260)
+                .scaleEffect(flameGlow ? 1.05 : 0.95)
+
+            Image(systemName: "flame.fill")
+                .font(.system(size: 120, weight: .black))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 1.0, green: 0.85, blue: 0.25),
+                            Color(red: 1.0, green: 0.45, blue: 0.10),
+                            Color(red: 0.85, green: 0.15, blue: 0.10)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .shadow(color: Color.orange.opacity(0.5), radius: 14, x: 0, y: 8)
+                .scaleEffect(flameGlow ? 1.05 : 0.95)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                flameGlow = true
+            }
+        }
+    }
+
+    // MARK: - Signed-in root
+
+    private var signedInRoot: some View {
         NavigationStack {
 
             ZStack {
@@ -37,6 +158,8 @@ struct ContentView: View {
                 if !store.streaks.isEmpty {
                     ToolbarItem(placement: .topBarLeading) {
                         EditButton()
+                            .foregroundStyle(Color(red: 0.12, green: 0.13, blue: 0.16))
+                            .font(.body.weight(.semibold))
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -58,19 +181,6 @@ struct ContentView: View {
                 SettingsSheet(store: store)
                     .environmentObject(auth)
             }
-            .alert(
-                "Sign-in error",
-                isPresented: Binding(
-                    get: { auth.errorMessage != nil },
-                    set: { if !$0 { auth.errorMessage = nil } }
-                ),
-                actions: {
-                    Button("OK", role: .cancel) { auth.errorMessage = nil }
-                },
-                message: {
-                    Text(auth.errorMessage ?? "")
-                }
-            )
         }
     }
 
@@ -79,13 +189,6 @@ struct ContentView: View {
     @ViewBuilder
     private var content: some View {
         List {
-            if auth.user == nil {
-                signInBanner
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
-            }
-
             if store.streaks.isEmpty {
                 emptyState
                     .listRowBackground(Color.clear)
@@ -109,38 +212,6 @@ struct ContentView: View {
     }
 
     // MARK: - Sections
-
-    private var signInBanner: some View {
-        Button {
-            Task { await auth.signInWithGoogle() }
-        } label: {
-            HStack(spacing: 12) {
-                GoogleGLogo(size: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Sign in to save your streaks")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.primary)
-                    Text("Back them up and sync across your devices.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(14)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
-        }
-        .buttonStyle(.plain)
-        .disabled(auth.isWorking)
-    }
 
     private var addGoalCard: some View {
         HStack(spacing: 12) {
@@ -177,44 +248,9 @@ struct ContentView: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            ZStack {
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color.orange.opacity(0.35),
-                                Color.orange.opacity(0.0)
-                            ],
-                            center: .center,
-                            startRadius: 4,
-                            endRadius: 110
-                        )
-                    )
-                    .frame(width: 220, height: 220)
-                    .scaleEffect(flameGlow ? 1.05 : 0.95)
-
-                Image(systemName: "flame.fill")
-                    .font(.system(size: 96, weight: .black))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 1.0, green: 0.85, blue: 0.25),
-                                Color(red: 1.0, green: 0.45, blue: 0.10),
-                                Color(red: 0.85, green: 0.15, blue: 0.10)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .shadow(color: Color.orange.opacity(0.5), radius: 12, x: 0, y: 6)
-                    .scaleEffect(flameGlow ? 1.04 : 0.96)
-            }
-            .onAppear {
-                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
-                    flameGlow = true
-                }
-            }
+            flameMark
+                .scaleEffect(0.7)
+                .padding(.bottom, -16)
 
             VStack(spacing: 6) {
                 Text("Light your first streak")

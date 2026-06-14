@@ -56,9 +56,25 @@ class StreakStore: ObservableObject {
                     self.sync?.start(for: user.uid)
                 } else {
                     self.sync?.stop()
+                    self.clearLocalData()
                 }
             }
         }
+    }
+
+    /// Wipes the on-device cache. Used when the user signs out so the
+    /// next person to open the app on this device sees a fresh slate.
+    /// Remote data in Firestore is untouched.
+    private func clearLocalData() {
+        streaks = []
+        cardSize = StreakStore.defaultCardSize
+        backgroundColor = .appBackground
+        backgroundImageData = nil
+
+        UserDefaults.standard.removeObject(forKey: "streaks")
+        UserDefaults.standard.removeObject(forKey: backgroundColorKey)
+        UserDefaults.standard.removeObject(forKey: cardSizeKey)
+        try? FileManager.default.removeItem(at: backgroundImageURL)
     }
 
     func snapshotForSync() -> StreakStoreSnapshot {
