@@ -48,6 +48,11 @@ class StreakStore: ObservableObject {
         save()
     }
 
+    func moveStreak(from offsets: IndexSet, to destination: Int) {
+        streaks.move(fromOffsets: offsets, toOffset: destination)
+        save()
+    }
+
     func renameStreak(_ streak: Streak, to newName: String) {
         guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
         streaks[index].name = newName
