@@ -70,24 +70,24 @@ struct ContentView: View {
                 Button {
                     Task { await auth.signInWithGoogle() }
                 } label: {
-                    HStack(spacing: 10) {
-                        GoogleGLogo(size: 20)
+                    HStack(spacing: 14) {
+                        GoogleGLogo(size: 32)
                         Text(auth.isWorking ? "Signing in…" : "Sign in with Google")
-                            .font(.body.weight(.semibold))
-                            .foregroundColor(.primary)
+                            .font(.title3.weight(.bold))
+                            .foregroundColor(Color(red: 0.10, green: 0.11, blue: 0.14))
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .padding(.vertical, 18)
                     .background(Color.white)
                     .clipShape(Capsule())
                     .overlay(
-                        Capsule().stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                        Capsule().stroke(Color.gray.opacity(0.35), lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.12), radius: 5, x: 0, y: 2)
                 }
                 .buttonStyle(.plain)
                 .disabled(auth.isWorking)
-                .padding(.horizontal, 32)
+                .padding(.horizontal, 24)
 
                 Text("Your streaks are private to your Google account.")
                     .font(.caption)
