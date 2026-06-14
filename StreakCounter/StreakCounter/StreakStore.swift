@@ -8,7 +8,9 @@
 import Foundation
 import Combine
 import SwiftUI
+import FirebaseAuth
 
+@MainActor
 class StreakStore: ObservableObject {
 
     @Published var streaks: [Streak] = []
@@ -21,12 +23,69 @@ class StreakStore: ObservableObject {
     private let backgroundColorKey = "backgroundColor"
     private let cardSizeKey = "cardSize"
 
+    private var sync: FirestoreSync?
+    private var authHandle: AuthStateDidChangeListenerHandle?
+
     init() {
         load()
         loadBackgroundImage()
         loadBackgroundColor()
         loadCardSize()
+        setupSync()
     }
+
+    deinit {
+        if let authHandle {
+            Auth.auth().removeStateDidChangeListener(authHandle)
+        }
+    }
+
+    // MARK: - Sync wiring
+
+    private func setupSync() {
+        sync = FirestoreSync(store: self)
+
+        if let uid = Auth.auth().currentUser?.uid {
+            sync?.start(for: uid)
+        }
+
+        authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            Task { @MainActor in
+                guard let self else { return }
+                if let user {
+                    self.sync?.start(for: user.uid)
+                } else {
+                    self.sync?.stop()
+                }
+            }
+        }
+    }
+
+    func snapshotForSync() -> StreakStoreSnapshot {
+        StreakStoreSnapshot(
+            streaks: streaks,
+            cardSize: cardSize,
+            backgroundColor: backgroundColor
+        )
+    }
+
+    /// Apply a snapshot received from Firestore. Writes to the local
+    /// cache so the offline UI sees the merged state too.
+    func applyRemoteSnapshot(_ snapshot: StreakStoreSnapshot) {
+        self.streaks = snapshot.streaks
+        self.cardSize = snapshot.cardSize
+        self.backgroundColor = snapshot.backgroundColor
+
+        if let data = try? JSONEncoder().encode(streaks) {
+            UserDefaults.standard.set(data, forKey: "streaks")
+        }
+        if let data = try? JSONEncoder().encode(backgroundColor) {
+            UserDefaults.standard.set(data, forKey: backgroundColorKey)
+        }
+        UserDefaults.standard.set(cardSize, forKey: cardSizeKey)
+    }
+
+    // MARK: - Streak CRUD
 
     func addStreak(name: String) {
 
@@ -298,6 +357,7 @@ class StreakStore: ObservableObject {
         if let data = try? JSONEncoder().encode(codable) {
             UserDefaults.standard.set(data, forKey: backgroundColorKey)
         }
+        pushToCloud()
     }
 
     private func loadBackgroundColor() {
@@ -313,6 +373,7 @@ class StreakStore: ObservableObject {
     func setCardSize(_ size: Double) {
         cardSize = size
         UserDefaults.standard.set(size, forKey: cardSizeKey)
+        pushToCloud()
     }
 
     private func loadCardSize() {
@@ -328,6 +389,11 @@ class StreakStore: ObservableObject {
         if let data = try? JSONEncoder().encode(streaks) {
             UserDefaults.standard.set(data, forKey: "streaks")
         }
+        pushToCloud()
+    }
+
+    private func pushToCloud() {
+        sync?.push(snapshot: snapshotForSync())
     }
 
     private func load() {
