@@ -1,4 +1,4 @@
-<h1 align="center">🔥 Streakify</h1>
+<h1 align="center">🔥 Streakora</h1>
 
 <p align="center">
   A clean, distraction-free, and highly customizable streak counter designed to help you stay accountable.
@@ -22,3 +22,11 @@
 <p>
   Beat the mid-streak slump by sending motivational messages to your future self that only unlock when you hit specific milestones.
 </p>
+<h3>🗓️ 3. Interactive Historical Calendar View</h3>
+<p>
+  A comprehensive, unified birds-eye view of your accountability journey.
+</p>
+
+<hr>
+
+<p>Built with Swift and SwiftUI</p>
