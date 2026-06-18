@@ -30,3 +30,4 @@
 <hr>
 
 <p>Built with Swift and SwiftUI</p>
+<p>For inquiries or support, email me at ryanlin440@gmail.com or call (408) 733-9999.</p>
