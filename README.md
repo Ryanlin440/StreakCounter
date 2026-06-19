@@ -30,4 +30,5 @@
 <hr>
 
 <p>Built with Swift and SwiftUI</p>
-<p>For inquiries or support, email me at ryanlin440@gmail.com or text (408) 733-9999.</p>
+<h3>Contact Info</h3>
+<p>Email me at ryanlin440@gmail.com or text (408) 733-9999.</p>
