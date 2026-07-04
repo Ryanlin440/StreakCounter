@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AuthenticationServices
 
 struct ContentView: View {
 
@@ -15,14 +16,16 @@ struct ContentView: View {
 
     @StateObject private var store = StreakStore()
     @EnvironmentObject private var auth: AuthService
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var newGoal = ""
     @State private var showSettings = false
     @State private var flameGlow = false
+    @State private var pendingDelete: Streak?
 
     var body: some View {
         Group {
-            if auth.user == nil {
+            if auth.user == nil && !auth.isGuest {
                 signInGate
             } else {
                 signedInRoot
@@ -41,6 +44,11 @@ struct ContentView: View {
                 Text(auth.errorMessage ?? "")
             }
         )
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                store.refreshNotifications()
+            }
+        }
     }
 
     // MARK: - Sign-in gate
@@ -49,13 +57,13 @@ struct ContentView: View {
         ZStack {
             backgroundView
 
-            VStack(spacing: 28) {
+            VStack(spacing: 24) {
                 Spacer()
 
                 flameMark
 
                 VStack(spacing: 10) {
-                    Text("StreakCounter")
+                    Text("Streakora")
                         .font(.system(size: 40, weight: .heavy))
                         .foregroundColor(Color(red: 0.10, green: 0.11, blue: 0.14))
                     Text("Sign in to start your streaks and keep them in sync across every device.")
@@ -67,31 +75,72 @@ struct ContentView: View {
 
                 Spacer()
 
-                Button {
-                    Task { await auth.signInWithGoogle() }
-                } label: {
-                    HStack(spacing: 14) {
-                        GoogleGLogo(size: 32)
-                        Text(auth.isWorking ? "Signing in…" : "Sign in with Google")
-                            .font(.title3.weight(.bold))
-                            .foregroundColor(Color(red: 0.10, green: 0.11, blue: 0.14))
+                VStack(spacing: 12) {
+                    Button {
+                        Task { await auth.signInWithGoogle() }
+                    } label: {
+                        HStack(spacing: 14) {
+                            GoogleGLogo(size: 28)
+                            Text(auth.isWorking ? "Signing in…" : "Sign in with Google")
+                                .font(.title3.weight(.bold))
+                                .foregroundColor(Color(red: 0.10, green: 0.11, blue: 0.14))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color.white)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule().stroke(Color.gray.opacity(0.35), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.12), radius: 5, x: 0, y: 2)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .background(Color.white)
-                    .clipShape(Capsule())
-                    .overlay(
-                        Capsule().stroke(Color.gray.opacity(0.35), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(0.12), radius: 5, x: 0, y: 2)
+                    .buttonStyle(.plain)
+                    .disabled(auth.isWorking)
+
+                    Button {
+                        auth.signInWithApple()
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "applelogo")
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundColor(.white)
+                            Text("Sign in with Apple")
+                                .font(.title3.weight(.bold))
+                                .foregroundColor(.white)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color.black)
+                        .clipShape(Capsule())
+                        .shadow(color: .black.opacity(0.12), radius: 5, x: 0, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(auth.isWorking)
+
+                    Button {
+                        auth.continueAsGuest()
+                    } label: {
+                        Text("Continue as Guest")
+                            .font(.body.weight(.semibold))
+                            .foregroundColor(Color(red: 0.10, green: 0.11, blue: 0.14))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(Color.white.opacity(0.7))
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule().stroke(Color.gray.opacity(0.35), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(auth.isWorking)
                 }
-                .buttonStyle(.plain)
-                .disabled(auth.isWorking)
                 .padding(.horizontal, 24)
 
-                Text("Your streaks are private to your Google account.")
+                Text("Guest mode keeps your data on this device only.")
                     .font(.footnote.weight(.medium))
                     .foregroundColor(Color(red: 0.28, green: 0.30, blue: 0.34))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
                     .padding(.bottom, 24)
             }
             .frame(maxWidth: ContentView.phoneContentMaxWidth)
@@ -204,11 +253,36 @@ struct ContentView: View {
                 .onMove { from, to in
                     store.moveStreak(from: from, to: to)
                 }
+                .onDelete { offsets in
+                    if let index = offsets.first {
+                        pendingDelete = store.streaks[index]
+                    }
+                }
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
+        .confirmationDialog(
+            "Delete \"\(pendingDelete?.name ?? "this streak")\"?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let streak = pendingDelete {
+                    store.deleteStreak(streak)
+                }
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDelete = nil
+            }
+        } message: {
+            Text("This permanently removes the streak and its history. This cannot be undone.")
+        }
     }
 
     // MARK: - Sections
@@ -284,6 +358,12 @@ struct ContentView: View {
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
+                    // Pin to the available space and clip the overflow.
+                    // Without this, scaledToFill uses the image's huge
+                    // intrinsic size, which inflates the ZStack and traps
+                    // the scrollable list in the middle of the screen.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
             }
         }
         .ignoresSafeArea()

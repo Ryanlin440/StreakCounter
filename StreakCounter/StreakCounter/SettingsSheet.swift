@@ -28,6 +28,47 @@ struct SettingsSheet: View {
                         } label: {
                             Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
                         }
+                    } else if auth.isGuest {
+                        guestRow
+                        TextField(
+                            "Email for milestone messages",
+                            text: Binding(
+                                get: { auth.guestEmail },
+                                set: { auth.setGuestEmail($0) }
+                            )
+                        )
+                        .textContentType(.emailAddress)
+                        .keyboardType(.emailAddress)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        Button {
+                            Task { await auth.signInWithGoogle() }
+                        } label: {
+                            HStack(spacing: 10) {
+                                GoogleGLogo(size: 18)
+                                Text("Sign in with Google")
+                                    .font(.body.weight(.medium))
+                                    .foregroundColor(.primary)
+                            }
+                        }
+                        .disabled(auth.isWorking)
+                        Button {
+                            auth.signInWithApple()
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "applelogo")
+                                    .font(.system(size: 16, weight: .bold))
+                                Text("Sign in with Apple")
+                                    .font(.body.weight(.medium))
+                            }
+                            .foregroundColor(.primary)
+                        }
+                        .disabled(auth.isWorking)
+                        Button(role: .destructive) {
+                            auth.exitGuestMode()
+                        } label: {
+                            Label("Exit guest mode", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
                     } else {
                         Button {
                             Task { await auth.signInWithGoogle() }
@@ -38,6 +79,18 @@ struct SettingsSheet: View {
                                     .font(.body.weight(.medium))
                                     .foregroundColor(.primary)
                             }
+                        }
+                        .disabled(auth.isWorking)
+                        Button {
+                            auth.signInWithApple()
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "applelogo")
+                                    .font(.system(size: 16, weight: .bold))
+                                Text("Sign in with Apple")
+                                    .font(.body.weight(.medium))
+                            }
+                            .foregroundColor(.primary)
                         }
                         .disabled(auth.isWorking)
                     }
@@ -164,6 +217,23 @@ struct SettingsSheet: View {
             Color(red: 0.94, green: 0.94, blue: 0.94), // light gray
             Color(red: 0.18, green: 0.20, blue: 0.24)  // dark slate
         ]
+    }
+
+    @ViewBuilder
+    private var guestRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "person.crop.circle.dashed")
+                .resizable()
+                .frame(width: 40, height: 40)
+                .foregroundColor(.gray)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Guest")
+                    .font(.body.weight(.medium))
+                Text("Data is stored on this device only")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     @ViewBuilder

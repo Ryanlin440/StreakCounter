@@ -40,6 +40,9 @@ struct StreakCounterApp: App {
                 .onOpenURL { url in
                     GIDSignIn.sharedInstance.handle(url)
                 }
+                .task {
+                    await NotificationManager.requestAuthorization()
+                }
         }
     }
 }

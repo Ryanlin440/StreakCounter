@@ -10,16 +10,32 @@ import Combine
 import FirebaseAuth
 import FirebaseCore
 import GoogleSignIn
+import AuthenticationServices
+import CryptoKit
 
-final class AuthService: ObservableObject {
+final class AuthService: NSObject, ObservableObject {
 
     @Published private(set) var user: User?
     @Published private(set) var isWorking: Bool = false
     @Published var errorMessage: String?
 
-    private var stateHandle: AuthStateDidChangeListenerHandle?
+    // Guest mode lets reviewers (and users without a Google/Apple account)
+    // use the full app without authenticating.
+    @Published var isGuest: Bool = false
+    @Published var guestEmail: String = ""
 
-    init() {
+    private var stateHandle: AuthStateDidChangeListenerHandle?
+    private var currentNonce: String?
+
+    private let guestModeKey = "isGuestMode"
+    private let guestEmailKey = "guestEmail"
+
+    override init() {
+        super.init()
+
+        isGuest = UserDefaults.standard.bool(forKey: guestModeKey)
+        guestEmail = UserDefaults.standard.string(forKey: guestEmailKey) ?? ""
+
         guard FirebaseApp.app() != nil else { return }
 
         if let clientID = FirebaseApp.app()?.options.clientID {
@@ -29,7 +45,12 @@ final class AuthService: ObservableObject {
         user = Auth.auth().currentUser
         stateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             Task { @MainActor in
-                self?.user = user
+                guard let self else { return }
+                self.user = user
+                // Signing into a real account exits guest mode automatically.
+                if user != nil, self.isGuest {
+                    self.exitGuestMode()
+                }
             }
         }
 
@@ -47,7 +68,35 @@ final class AuthService: ObservableObject {
         }
     }
 
-    var isSignedIn: Bool { user != nil }
+    var isSignedIn: Bool { user != nil || isGuest }
+
+    /// Email we should send milestone messages to. Prefers the signed-in
+    /// account's email; falls back to the guest-supplied address.
+    var effectiveEmail: String? {
+        if let email = user?.email, !email.isEmpty { return email }
+        if isGuest, !guestEmail.isEmpty { return guestEmail }
+        return nil
+    }
+
+    // MARK: - Guest mode
+
+    func continueAsGuest() {
+        isGuest = true
+        UserDefaults.standard.set(true, forKey: guestModeKey)
+    }
+
+    func exitGuestMode() {
+        isGuest = false
+        UserDefaults.standard.set(false, forKey: guestModeKey)
+    }
+
+    func setGuestEmail(_ email: String) {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guestEmail = trimmed
+        UserDefaults.standard.set(trimmed, forKey: guestEmailKey)
+    }
+
+    // MARK: - Google
 
     @MainActor
     func signInWithGoogle() async {
@@ -65,6 +114,25 @@ final class AuthService: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    // MARK: - Apple
+
+    @MainActor
+    func signInWithApple() {
+        let nonce = Self.randomNonceString()
+        currentNonce = nonce
+
+        let provider = ASAuthorizationAppleIDProvider()
+        let request = provider.createRequest()
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = Self.sha256(nonce)
+
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        controller.delegate = self
+        controller.presentationContextProvider = self
+        isWorking = true
+        controller.performRequests()
     }
 
     func signOut() {
@@ -107,6 +175,91 @@ final class AuthService: ObservableObject {
             top = presented
         }
         return top
+    }
+
+    // MARK: - Nonce helpers (Apple Sign In)
+
+    private static func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        let charset: [Character] = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._")
+        var result = ""
+        var remaining = length
+        while remaining > 0 {
+            var randoms = [UInt8](repeating: 0, count: 16)
+            let status = SecRandomCopyBytes(kSecRandomDefault, randoms.count, &randoms)
+            guard status == errSecSuccess else {
+                fatalError("Unable to generate random bytes: \(status)")
+            }
+            for byte in randoms where remaining > 0 {
+                if byte < charset.count {
+                    result.append(charset[Int(byte)])
+                    remaining -= 1
+                }
+            }
+        }
+        return result
+    }
+
+    private static func sha256(_ input: String) -> String {
+        let hashed = SHA256.hash(data: Data(input.utf8))
+        return hashed.compactMap { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// MARK: - Apple Sign In delegates
+
+extension AuthService: ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+
+    func authorizationController(
+        controller: ASAuthorizationController,
+        didCompleteWithAuthorization authorization: ASAuthorization
+    ) {
+        defer {
+            Task { @MainActor in self.isWorking = false }
+        }
+
+        guard let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential,
+              let nonce = currentNonce,
+              let appleIDToken = appleIDCredential.identityToken,
+              let idTokenString = String(data: appleIDToken, encoding: .utf8) else {
+            Task { @MainActor in
+                self.errorMessage = "Apple sign-in did not return a valid token."
+            }
+            return
+        }
+
+        let credential = OAuthProvider.appleCredential(
+            withIDToken: idTokenString,
+            rawNonce: nonce,
+            fullName: appleIDCredential.fullName
+        )
+
+        Task { @MainActor in
+            do {
+                try await Auth.auth().signIn(with: credential)
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func authorizationController(
+        controller: ASAuthorizationController,
+        didCompleteWithError error: Error
+    ) {
+        Task { @MainActor in
+            self.isWorking = false
+            // Don't surface cancellations as an error.
+            if (error as NSError).code != ASAuthorizationError.canceled.rawValue {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first(where: { $0.isKeyWindow }) ?? ASPresentationAnchor()
     }
 }
 

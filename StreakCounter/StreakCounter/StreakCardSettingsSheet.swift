@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import PhotosUI
 import FirebaseAuth
 
 struct StreakCardSettingsSheet: View {
@@ -15,6 +16,7 @@ struct StreakCardSettingsSheet: View {
 
     @State private var nameDraft: String = ""
     @State private var notesDraft: String = ""
+    @State private var selectedPhoto: PhotosPickerItem?
     @State private var showDeleteConfirm = false
     @State private var showFinalDeleteConfirm = false
     @State private var showClearDataConfirm = false
@@ -104,6 +106,24 @@ struct StreakCardSettingsSheet: View {
                     }
 
                     Section {
+                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                            Label("Choose photo…", systemImage: "photo.on.rectangle")
+                        }
+                        if store.cardImageData(for: streak) != nil {
+                            Button(role: .destructive) {
+                                store.setCardImage(data: nil, for: streak)
+                                selectedPhoto = nil
+                            } label: {
+                                Label("Remove photo", systemImage: "trash")
+                            }
+                        }
+                    } header: {
+                        Text("Card image")
+                    } footer: {
+                        Text("Shown behind this card's content. Stored on this device only.")
+                    }
+
+                    Section {
                         Button(role: .destructive) {
                             showClearDataConfirm = true
                         } label: {
@@ -144,6 +164,14 @@ struct StreakCardSettingsSheet: View {
             .onChange(of: notesDraft) { _, _ in
                 saveNotes()
             }
+            .onChange(of: selectedPhoto) { _, newValue in
+                Task {
+                    guard let streak = streak,
+                          let data = try? await newValue?.loadTransferable(type: Data.self)
+                    else { return }
+                    store.setCardImage(data: data, for: streak)
+                }
+            }
             .sheet(isPresented: $showAddMessage) {
                 if let s = streak {
                     AddMilestoneMessageSheet(streak: s, store: store)
@@ -152,9 +180,9 @@ struct StreakCardSettingsSheet: View {
             .sheet(item: $viewingMessage) { msg in
                 MilestoneMessageDetailSheet(
                     message: msg,
-                    streakName: streak?.name ?? "",
-                    recipientEmail: auth.user?.email
+                    streakName: streak?.name ?? ""
                 )
+                .environmentObject(auth)
             }
             .confirmationDialog(
                 "Delete \"\(streak?.name ?? "this streak")\"?",

@@ -79,12 +79,18 @@ struct MilestoneMessageDetailSheet: View {
 
     let message: MilestoneMessage
     let streakName: String
-    let recipientEmail: String?
+    @EnvironmentObject private var auth: AuthService
 
     @Environment(\.dismiss) private var dismiss
 
     @State private var showMailComposer = false
     @State private var showMailUnavailableAlert = false
+    @State private var showGuestEmailPrompt = false
+    @State private var guestEmailDraft = ""
+
+    private var recipientEmail: String? {
+        auth.effectiveEmail
+    }
 
     var body: some View {
         NavigationStack {
@@ -112,11 +118,7 @@ struct MilestoneMessageDetailSheet: View {
 
                         if let email = recipientEmail, !email.isEmpty {
                             Button {
-                                if MFMailComposeViewController.canSendMail() {
-                                    showMailComposer = true
-                                } else {
-                                    showMailUnavailableAlert = true
-                                }
+                                presentMailComposer()
                             } label: {
                                 Label("Send to \(email)", systemImage: "paperplane.fill")
                                     .frame(maxWidth: .infinity)
@@ -124,8 +126,19 @@ struct MilestoneMessageDetailSheet: View {
                             .buttonStyle(.borderedProminent)
                             .tint(.orange)
                             .padding(.top, 8)
+                        } else if auth.isGuest {
+                            Button {
+                                guestEmailDraft = auth.guestEmail
+                                showGuestEmailPrompt = true
+                            } label: {
+                                Label("Email this message", systemImage: "paperplane.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+                            .padding(.top, 8)
                         } else {
-                            Text("Sign in with Google in Settings to email this message to your future self.")
+                            Text("Sign in or continue as guest to email this message to your future self.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .padding(.top, 8)
@@ -161,6 +174,30 @@ struct MilestoneMessageDetailSheet: View {
             } message: {
                 Text("Set up the Mail app on this device to send your milestone message.")
             }
+            .alert("Where should we send it?", isPresented: $showGuestEmailPrompt) {
+                TextField("you@example.com", text: $guestEmailDraft)
+                    .textContentType(.emailAddress)
+                    .keyboardType(.emailAddress)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                Button("Cancel", role: .cancel) { }
+                Button("Send") {
+                    let trimmed = guestEmailDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    auth.setGuestEmail(trimmed)
+                    presentMailComposer()
+                }
+            } message: {
+                Text("Enter the email address to send this milestone message to.")
+            }
+        }
+    }
+
+    private func presentMailComposer() {
+        if MFMailComposeViewController.canSendMail() {
+            showMailComposer = true
+        } else {
+            showMailUnavailableAlert = true
         }
     }
 

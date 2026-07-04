@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import UIKit
 import FirebaseAuth
 
 @MainActor
@@ -15,6 +16,10 @@ class StreakStore: ObservableObject {
 
     @Published var streaks: [Streak] = []
     @Published var backgroundImageData: Data?
+    /// Per-card background photos, keyed by streak ID. Stored on-device only
+    /// (like `backgroundImageData`) — not part of the synced snapshot, so a
+    /// full-res photo can't push the Firestore document over its size limit.
+    @Published var cardImages: [UUID: Data] = [:]
     @Published var backgroundColor: CodableColor = .appBackground
     @Published var cardSize: Double = 1.0
 
@@ -28,6 +33,7 @@ class StreakStore: ObservableObject {
 
     init() {
         load()
+        loadCardImages()
         loadBackgroundImage()
         loadBackgroundColor()
         loadCardSize()
@@ -66,6 +72,11 @@ class StreakStore: ObservableObject {
     /// next person to open the app on this device sees a fresh slate.
     /// Remote data in Firestore is untouched.
     private func clearLocalData() {
+        for id in cardImages.keys {
+            try? FileManager.default.removeItem(at: cardImageURL(for: id))
+        }
+        cardImages = [:]
+
         streaks = []
         cardSize = StreakStore.defaultCardSize
         backgroundColor = .appBackground
@@ -75,6 +86,8 @@ class StreakStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: backgroundColorKey)
         UserDefaults.standard.removeObject(forKey: cardSizeKey)
         try? FileManager.default.removeItem(at: backgroundImageURL)
+
+        refreshNotifications()
     }
 
     func snapshotForSync() -> StreakStoreSnapshot {
@@ -99,6 +112,8 @@ class StreakStore: ObservableObject {
             UserDefaults.standard.set(data, forKey: backgroundColorKey)
         }
         UserDefaults.standard.set(cardSize, forKey: cardSizeKey)
+
+        refreshNotifications()
     }
 
     // MARK: - Streak CRUD
@@ -120,6 +135,7 @@ class StreakStore: ObservableObject {
 
     func deleteStreak(_ streak: Streak) {
         streaks.removeAll { $0.id == streak.id }
+        setCardImage(data: nil, for: streak)
         save()
     }
 
@@ -249,6 +265,27 @@ class StreakStore: ObservableObject {
         status(for: Date(), on: streak) == .done
     }
 
+    /// Number of streaks the user hasn't meaningfully filled out today.
+    /// A streak counts as unfilled if no status is set yet, or if it's still
+    /// on the default middle "Neutral" — so switching a Done/Not Done answer
+    /// back to Neutral re-increments the badge.
+    /// Used for the app-icon badge and the nightly reminder text.
+    var unfilledTodayCount: Int {
+        streaks.filter {
+            let status = status(for: Date(), on: $0)
+            return status == nil || status == .neutral
+        }.count
+    }
+
+    /// Push the current badge count and nightly reminders to the system.
+    func refreshNotifications() {
+        let unfilled = unfilledTodayCount
+        let total = streaks.count
+        Task {
+            await NotificationManager.refresh(unfilledToday: unfilled, totalStreaks: total)
+        }
+    }
+
     func currentStreak(for streak: Streak) -> Int {
 
         let calendar = Calendar.current
@@ -365,6 +402,71 @@ class StreakStore: ObservableObject {
         backgroundImageData = try? Data(contentsOf: backgroundImageURL)
     }
 
+    // MARK: - Per-card image
+
+    /// The photo shown behind a given card, if one has been set.
+    func cardImageData(for streak: Streak) -> Data? {
+        cardImages[streak.id]
+    }
+
+    /// Set or clear a card's background photo. Pass `nil` to remove it.
+    /// The image is downscaled before storing to keep memory and disk small.
+    func setCardImage(data: Data?, for streak: Streak) {
+        let url = cardImageURL(for: streak.id)
+        if let data {
+            let stored = downscaledJPEG(data) ?? data
+            cardImages[streak.id] = stored
+            try? stored.write(to: url)
+        } else {
+            cardImages[streak.id] = nil
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private func cardImageURL(for id: UUID) -> URL {
+        let docs = FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        )[0]
+        return docs.appendingPathComponent("cardImage-\(id.uuidString).dat")
+    }
+
+    private func loadCardImages() {
+        var map: [UUID: Data] = [:]
+        for streak in streaks {
+            if let data = try? Data(contentsOf: cardImageURL(for: streak.id)) {
+                map[streak.id] = data
+            }
+        }
+        cardImages = map
+    }
+
+    /// Resize an image to fit within `maxDimension` and re-encode as JPEG.
+    /// Returns nil if the data isn't a decodable image.
+    private func downscaledJPEG(
+        _ data: Data,
+        maxDimension: CGFloat = 1200,
+        quality: CGFloat = 0.8
+    ) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let longestSide = max(image.size.width, image.size.height)
+        let scale = longestSide > maxDimension ? maxDimension / longestSide : 1
+        if scale >= 1 {
+            return image.jpegData(compressionQuality: quality)
+        }
+        let newSize = CGSize(
+            width: image.size.width * scale,
+            height: image.size.height * scale
+        )
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+        let resized = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+        return resized.jpegData(compressionQuality: quality)
+    }
+
     // MARK: - Background color
 
     func setBackgroundColor(_ color: Color) {
@@ -406,6 +508,7 @@ class StreakStore: ObservableObject {
             UserDefaults.standard.set(data, forKey: "streaks")
         }
         pushToCloud()
+        refreshNotifications()
     }
 
     private func pushToCloud() {

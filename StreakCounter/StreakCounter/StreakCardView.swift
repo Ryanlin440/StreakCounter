@@ -107,7 +107,7 @@ struct StreakCardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14 * scale)
-        .background(streak.cardColor.color)
+        .background(cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
             RoundedRectangle(cornerRadius: 14)
@@ -117,6 +117,19 @@ struct StreakCardView: View {
         .sheet(isPresented: $showCardSettings) {
             StreakCardSettingsSheet(streakID: streak.id, store: store)
                 .environmentObject(auth)
+        }
+    }
+
+    @ViewBuilder
+    private var cardBackground: some View {
+        ZStack {
+            streak.cardColor.color
+            if let data = store.cardImageData(for: streak),
+               let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            }
         }
     }
 
