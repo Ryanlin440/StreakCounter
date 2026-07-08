@@ -16,7 +16,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		771493ED2FD78C7800A3B6E9 /* fixationsuccession.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = fixationsuccession.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		771493ED2FD78C7800A3B6E9 /* Streakora.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Streakora.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		771494012FD79E6E00A3B6E9 /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
 		7714940C2FD7AB8400A3B6E9 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -71,7 +71,7 @@
 		771493EE2FD78C7800A3B6E9 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				771493ED2FD78C7800A3B6E9 /* fixationsuccession.app */,
+				771493ED2FD78C7800A3B6E9 /* Streakora.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -109,7 +109,7 @@
 				771494112FD7ACEB00A3B6E9 /* GoogleSignInSwift */,
 			);
 			productName = StreakCounter;
-			productReference = 771493ED2FD78C7800A3B6E9 /* fixationsuccession.app */;
+			productReference = 771493ED2FD78C7800A3B6E9 /* Streakora.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -319,7 +319,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ryanlin.StreakCounter2;
-				PRODUCT_NAME = fixationsuccession;
+				PRODUCT_NAME = Streakora;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -354,7 +354,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ryanlin.StreakCounter2;
-				PRODUCT_NAME = fixationsuccession;
+				PRODUCT_NAME = Streakora;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
