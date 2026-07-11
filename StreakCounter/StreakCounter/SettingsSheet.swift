@@ -15,7 +15,9 @@ struct SettingsSheet: View {
 
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showClearAllConfirm = false
-    @State private var showClearAllFinalConfirm = false
+    @State private var addingReminder = false
+    @State private var newReminderTime =
+        Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date()) ?? Date()
 
     var body: some View {
         NavigationStack {
@@ -155,10 +157,59 @@ struct SettingsSheet: View {
                 }
 
                 Section {
+                    if store.reminderTimes.isEmpty {
+                        Text("No daily reminders scheduled.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(store.reminderTimes) { time in
+                            Label(time.displayString, systemImage: "bell.fill")
+                        }
+                        .onDelete { offsets in
+                            store.removeReminderTimes(at: offsets)
+                        }
+                    }
+
+                    if addingReminder {
+                        DatePicker(
+                            "Time",
+                            selection: $newReminderTime,
+                            displayedComponents: .hourAndMinute
+                        )
+                        Button {
+                            store.addReminderTime(from: newReminderTime)
+                            addingReminder = false
+                        } label: {
+                            Label("Add this time", systemImage: "checkmark.circle.fill")
+                        }
+                        Button("Cancel") {
+                            addingReminder = false
+                        }
+                    } else {
+                        Button {
+                            addingReminder = true
+                        } label: {
+                            Label("Add notification", systemImage: "plus.circle")
+                        }
+                        .disabled(store.reminderTimes.count >= StreakStore.maxReminderTimes)
+                    }
+
+                    Button {
+                        Task { await NotificationManager.sendTestNotification() }
+                    } label: {
+                        Label("Send test notification", systemImage: "bell.badge")
+                    }
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("You'll get a reminder at each time above on days you still have streaks to fill out. Swipe left on a time to remove it. Remove them all for no reminders.")
+                }
+
+                Section {
                     Button(role: .destructive) {
                         showClearAllConfirm = true
                     } label: {
-                        Label("Quick clear all data", systemImage: "arrow.counterclockwise")
+                        Label("Clear all data", systemImage: "arrow.counterclockwise")
                     }
                     .disabled(store.streaks.isEmpty)
                 } header: {
@@ -186,22 +237,12 @@ struct SettingsSheet: View {
                 isPresented: $showClearAllConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Continue", role: .destructive) {
-                    showClearAllFinalConfirm = true
-                }
-            } message: {
-                Text("Resets progress on every streak and re-locks any milestone messages.")
-            }
-            .alert(
-                "Are you sure?",
-                isPresented: $showClearAllFinalConfirm
-            ) {
-                Button("Cancel", role: .cancel) { }
                 Button("Clear all data", role: .destructive) {
                     store.clearAllStreakData()
                 }
+                Button("Cancel", role: .cancel) { }
             } message: {
-                Text("All progress will be erased. This cannot be undone.")
+                Text("All progress will be erased and milestone messages re-locked. Streak names, notes, and colors are kept. This cannot be undone.")
             }
         }
     }

@@ -165,20 +165,11 @@ struct ContentView: View {
                 .frame(width: 260, height: 260)
                 .scaleEffect(flameGlow ? 1.05 : 0.95)
 
-            Image(systemName: "flame.fill")
-                .font(.system(size: 120, weight: .black))
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 1.0, green: 0.85, blue: 0.25),
-                            Color(red: 1.0, green: 0.45, blue: 0.10),
-                            Color(red: 0.85, green: 0.15, blue: 0.10)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 150, height: 150)
+                .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
                 .shadow(color: Color.orange.opacity(0.5), radius: 14, x: 0, y: 8)
                 .scaleEffect(flameGlow ? 1.05 : 0.95)
         }
@@ -245,43 +236,45 @@ struct ContentView: View {
                     .listRowInsets(EdgeInsets(top: 24, leading: 16, bottom: 16, trailing: 16))
             } else {
                 ForEach(store.streaks) { streak in
-                    StreakCardView(streak: streak, store: store)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    StreakListRow(
+                        streak: streak,
+                        store: store,
+                        pendingDelete: $pendingDelete
+                    )
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            pendingDelete = streak
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
                 }
                 .onMove { from, to in
                     store.moveStreak(from: from, to: to)
-                }
-                .onDelete { offsets in
-                    if let index = offsets.first {
-                        pendingDelete = store.streaks[index]
-                    }
                 }
             }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
-        .confirmationDialog(
+        .alert(
             "Delete \"\(pendingDelete?.name ?? "this streak")\"?",
             isPresented: Binding(
                 get: { pendingDelete != nil },
                 set: { if !$0 { pendingDelete = nil } }
             ),
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                if let streak = pendingDelete {
-                    store.deleteStreak(streak)
-                }
+            presenting: pendingDelete
+        ) { streak in
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+            Button("Delete forever", role: .destructive) {
+                store.deleteStreak(streak)
                 pendingDelete = nil
             }
-            Button("Cancel", role: .cancel) {
-                pendingDelete = nil
-            }
-        } message: {
-            Text("This permanently removes the streak and its history. This cannot be undone.")
+        } message: { streak in
+            Text("This permanently removes \"\(streak.name)\", its history, and any milestone messages. This cannot be undone.")
         }
     }
 
@@ -374,6 +367,39 @@ struct ContentView: View {
         guard !trimmed.isEmpty else { return }
         store.addStreak(name: trimmed)
         newGoal = ""
+    }
+}
+
+/// A single streak card in the list. Shows a trash button while the list is in
+/// edit mode; swipe-to-delete works when not editing. Both routes set
+/// `pendingDelete`, which drives a system confirmation alert in ContentView.
+private struct StreakListRow: View {
+
+    let streak: Streak
+    @ObservedObject var store: StreakStore
+    @Binding var pendingDelete: Streak?
+
+    @Environment(\.editMode) private var editMode
+
+    private var isEditing: Bool {
+        editMode?.wrappedValue.isEditing ?? false
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if isEditing {
+                Button {
+                    pendingDelete = streak
+                } label: {
+                    Image(systemName: "trash.circle.fill")
+                        .font(.system(size: 26))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .red)
+                }
+                .buttonStyle(.borderless)
+            }
+            StreakCardView(streak: streak, store: store)
+        }
     }
 }
 

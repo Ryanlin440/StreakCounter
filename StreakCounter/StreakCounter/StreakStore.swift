@@ -22,11 +22,18 @@ class StreakStore: ObservableObject {
     @Published var cardImages: [UUID: Data] = [:]
     @Published var backgroundColor: CodableColor = .appBackground
     @Published var cardSize: Double = 1.0
+    /// Times of day the user wants daily reminders. Stored on-device.
+    @Published var reminderTimes: [ReminderTime] = NotificationManager.defaultReminderTimes
 
     static let defaultCardSize: Double = 1.0
 
+    /// Hard cap so the pre-scheduled reminder requests stay well under
+    /// iOS's 64 pending-notification limit.
+    static let maxReminderTimes = 8
+
     private let backgroundColorKey = "backgroundColor"
     private let cardSizeKey = "cardSize"
+    private let reminderTimesKey = "reminderTimes"
 
     private var sync: FirestoreSync?
     private var authHandle: AuthStateDidChangeListenerHandle?
@@ -37,6 +44,7 @@ class StreakStore: ObservableObject {
         loadBackgroundImage()
         loadBackgroundColor()
         loadCardSize()
+        loadReminderTimes()
         setupSync()
     }
 
@@ -81,10 +89,12 @@ class StreakStore: ObservableObject {
         cardSize = StreakStore.defaultCardSize
         backgroundColor = .appBackground
         backgroundImageData = nil
+        reminderTimes = NotificationManager.defaultReminderTimes
 
         UserDefaults.standard.removeObject(forKey: "streaks")
         UserDefaults.standard.removeObject(forKey: backgroundColorKey)
         UserDefaults.standard.removeObject(forKey: cardSizeKey)
+        UserDefaults.standard.removeObject(forKey: reminderTimesKey)
         try? FileManager.default.removeItem(at: backgroundImageURL)
 
         refreshNotifications()
@@ -277,13 +287,81 @@ class StreakStore: ObservableObject {
         }.count
     }
 
-    /// Push the current badge count and nightly reminders to the system.
+    /// Push the current badge count and daily reminders to the system.
     func refreshNotifications() {
         let unfilled = unfilledTodayCount
         let total = streaks.count
+        let times = reminderTimes
         Task {
-            await NotificationManager.refresh(unfilledToday: unfilled, totalStreaks: total)
+            await NotificationManager.refresh(
+                times: times,
+                unfilledToday: unfilled,
+                totalStreaks: total
+            )
         }
+    }
+
+    // MARK: - Reminder times
+
+    /// Adds a daily reminder at the hour/minute of the given date.
+    func addReminderTime(from date: Date) {
+        guard reminderTimes.count < StreakStore.maxReminderTimes else { return }
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        let new = ReminderTime(hour: components.hour ?? 20, minute: components.minute ?? 0)
+        reminderTimes.append(new)
+        reminderTimes.sort { ($0.hour, $0.minute) < ($1.hour, $1.minute) }
+        saveReminderTimes()
+        refreshNotifications()
+    }
+
+    func removeReminderTimes(at offsets: IndexSet) {
+        reminderTimes.remove(atOffsets: offsets)
+        saveReminderTimes()
+        refreshNotifications()
+    }
+
+    private func saveReminderTimes() {
+        if let data = try? JSONEncoder().encode(reminderTimes) {
+            UserDefaults.standard.set(data, forKey: reminderTimesKey)
+        }
+    }
+
+    private func loadReminderTimes() {
+        guard let data = UserDefaults.standard.data(forKey: reminderTimesKey),
+              let decoded = try? JSONDecoder().decode([ReminderTime].self, from: data) else {
+            return
+        }
+        reminderTimes = decoded
+    }
+
+    // MARK: - Missed days
+
+    /// True if `date` is a past day (since the card was created) left on
+    /// Neutral — either never filled out (it defaults to Neutral when the day
+    /// resets) or explicitly marked Neutral.
+    func isMissedDay(_ date: Date, for streak: Streak) -> Bool {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let today = calendar.startOfDay(for: Date())
+        guard day < today, day >= calendar.startOfDay(for: streak.startDate) else {
+            return false
+        }
+        let status = streak.dayStatuses[Streak.dateKey(day)]
+        return status == nil || status == .neutral
+    }
+
+    /// Whether the streak has any past days still on Neutral.
+    func hasMissedDays(for streak: Streak) -> Bool {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var day = calendar.startOfDay(for: streak.startDate)
+        while day < today {
+            let status = streak.dayStatuses[Streak.dateKey(day)]
+            if status == nil || status == .neutral { return true }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return false
     }
 
     func currentStreak(for streak: Streak) -> Int {
@@ -348,6 +426,85 @@ class StreakStore: ObservableObject {
         }
 
         return longest
+    }
+
+    // MARK: - Not-done statistics
+
+    /// A day counts as "not done" if the user pressed Not Done or Neutral, or
+    /// if the day passed without being filled out (which defaults to Neutral).
+    private func countsAsNotDone(_ date: Date, for streak: Streak) -> Bool {
+        let status = streak.dayStatuses[Streak.dateKey(date)]
+        if status == .notDone || status == .neutral { return true }
+        guard status == nil else { return false }
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let today = calendar.startOfDay(for: Date())
+        return day < today && day >= calendar.startOfDay(for: streak.startDate)
+    }
+
+    func currentNotDoneStreak(for streak: Streak) -> Int {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let todayStatus = streak.dayStatuses[Streak.dateKey(today)]
+
+        // Marking today as done breaks the not-done run.
+        if todayStatus == .done { return 0 }
+
+        var anchor: Date
+        if todayStatus == .notDone || todayStatus == .neutral {
+            anchor = today
+        } else if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
+                  countsAsNotDone(yesterday, for: streak) {
+            anchor = yesterday
+        } else {
+            return 0
+        }
+
+        var count = 1
+        while let prev = calendar.date(byAdding: .day, value: -1, to: anchor),
+              countsAsNotDone(prev, for: streak) {
+            count += 1
+            anchor = prev
+        }
+        return count
+    }
+
+    func longestNotDoneStreak(for streak: Streak) -> Int {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var day = calendar.startOfDay(for: streak.startDate)
+
+        var longest = 0
+        var current = 0
+
+        while day <= today {
+            if countsAsNotDone(day, for: streak) {
+                current += 1
+                longest = max(longest, current)
+            } else {
+                current = 0
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+
+        // The current run can reach back before the start date via explicitly
+        // marked days, so make sure the best is never smaller than it.
+        return max(longest, currentNotDoneStreak(for: streak))
+    }
+
+    /// Number of distinct days marked Done.
+    func doneDayCount(for streak: Streak) -> Int {
+        Set(streak.completedDates.map { Calendar.current.startOfDay(for: $0) }).count
+    }
+
+    /// Days that have passed since the card was created, counting today.
+    func daysSinceCreation(for streak: Streak) -> Int {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: streak.startDate)
+        let today = calendar.startOfDay(for: Date())
+        let diff = calendar.dateComponents([.day], from: start, to: today).day ?? 0
+        return max(1, diff + 1)
     }
 
     func debugAdvanceDay() {

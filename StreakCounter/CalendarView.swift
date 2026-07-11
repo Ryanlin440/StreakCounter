@@ -107,7 +107,8 @@ struct StreakCalendarView: View {
                     DayCell(
                         date: date,
                         status: store.status(for: date, on: streak),
-                        isToday: calendar.isDateInToday(date)
+                        isToday: calendar.isDateInToday(date),
+                        isMissed: store.isMissedDay(date, for: streak)
                     ) { newStatus in
                         store.setStatus(newStatus, for: date, on: streak)
                     }
@@ -188,6 +189,8 @@ struct DayCell: View {
     let date: Date
     let status: DayStatus?
     let isToday: Bool
+    /// A past day that was never filled out (defaulted to Neutral).
+    var isMissed: Bool = false
     var onTap: (DayStatus) -> Void
 
     private let calendar = Calendar.current
@@ -195,7 +198,8 @@ struct DayCell: View {
     var body: some View {
 
         Menu {
-            ForEach(DayStatus.allCases, id: \.self) { s in
+            // Ordered Done → Neutral → Not Done so the positive action sits on top.
+            ForEach(DayStatus.allCases.reversed(), id: \.self) { s in
                 Button {
                     onTap(s)
                 } label: {
@@ -217,6 +221,16 @@ struct DayCell: View {
                 Text("\(calendar.component(.day, from: date))")
                     .font(.callout)
                     .foregroundStyle(textColor)
+
+                if isMissed {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 11))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .red)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(2)
+                        .accessibilityLabel("Never filled out")
+                }
             }
             .frame(height: 44)
         }

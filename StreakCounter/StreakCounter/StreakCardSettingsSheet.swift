@@ -14,14 +14,27 @@ struct StreakCardSettingsSheet: View {
     @EnvironmentObject private var auth: AuthService
     @Environment(\.dismiss) private var dismiss
 
-    @State private var nameDraft: String = ""
-    @State private var notesDraft: String = ""
+    @State private var nameDraft: String
+    @State private var notesDraft: String
     @State private var selectedPhoto: PhotosPickerItem?
-    @State private var showDeleteConfirm = false
-    @State private var showFinalDeleteConfirm = false
-    @State private var showClearDataConfirm = false
+    // Inline confirmations (rendered right in the Form / bottom bar). Alerts and
+    // confirmationDialogs presented from inside this sheet don't fire reliably,
+    // so we confirm with plain conditional views instead.
+    @State private var confirmingClear = false
+    @State private var confirmingDelete = false
     @State private var showAddMessage = false
     @State private var viewingMessage: MilestoneMessage?
+
+    init(streakID: UUID, store: StreakStore) {
+        self.streakID = streakID
+        _store = ObservedObject(wrappedValue: store)
+        // Seed the drafts up front so the Form measures its full height on the
+        // first render — otherwise the notes field grows after `onAppear` and
+        // the first scroll can't reach the bottom / bounces.
+        let streak = store.streaks.first(where: { $0.id == streakID })
+        _nameDraft = State(initialValue: streak?.name ?? "")
+        _notesDraft = State(initialValue: streak?.notes ?? "")
+    }
 
     private var streak: Streak? {
         store.streaks.first(where: { $0.id == streakID })
@@ -47,6 +60,25 @@ struct StreakCardSettingsSheet: View {
                         Text("Notes")
                     } footer: {
                         Text("Notes appear under the streak name on the card.")
+                    }
+
+                    Section {
+                        statRow(
+                            label: "Current not-done streak",
+                            value: "\(store.currentNotDoneStreak(for: streak)) days"
+                        )
+                        statRow(
+                            label: "Longest not-done streak",
+                            value: "\(store.longestNotDoneStreak(for: streak)) days"
+                        )
+                        statRow(
+                            label: "Days done",
+                            value: "\(store.doneDayCount(for: streak)) done / \(store.daysSinceCreation(for: streak)) days"
+                        )
+                    } header: {
+                        Text("Statistics")
+                    } footer: {
+                        Text("Not-done streaks treat Neutral and skipped days as not done. Days done compares the days you marked Done against every day since this card was created.")
                     }
 
                     Section {
@@ -124,21 +156,27 @@ struct StreakCardSettingsSheet: View {
                     }
 
                     Section {
-                        Button(role: .destructive) {
-                            showClearDataConfirm = true
-                        } label: {
-                            Label("Quick clear data", systemImage: "arrow.counterclockwise")
+                        if confirmingClear {
+                            Text("Clear all progress for this streak?")
+                                .font(.subheadline.weight(.semibold))
+                            Button(role: .destructive) {
+                                store.clearStreakData(streak)
+                                confirmingClear = false
+                            } label: {
+                                Label("Yes, clear streaks", systemImage: "arrow.counterclockwise")
+                            }
+                            Button("Cancel") {
+                                confirmingClear = false
+                            }
+                        } else {
+                            Button(role: .destructive) {
+                                confirmingClear = true
+                            } label: {
+                                Label("Clear streaks", systemImage: "arrow.counterclockwise")
+                            }
                         }
                     } footer: {
                         Text("Resets your progress on this streak. Keeps the name, notes, colors, and milestone messages.")
-                    }
-
-                    Section {
-                        Button(role: .destructive) {
-                            showDeleteConfirm = true
-                        } label: {
-                            Label("Delete streak", systemImage: "trash")
-                        }
                     }
                 }
             }
@@ -153,10 +191,6 @@ struct StreakCardSettingsSheet: View {
                     }
                     .bold()
                 }
-            }
-            .onAppear {
-                nameDraft = streak?.name ?? ""
-                notesDraft = streak?.notes ?? ""
             }
             .onChange(of: nameDraft) { _, _ in
                 saveName()
@@ -184,39 +218,55 @@ struct StreakCardSettingsSheet: View {
                 )
                 .environmentObject(auth)
             }
-            .confirmationDialog(
-                "Delete \"\(streak?.name ?? "this streak")\"?",
-                isPresented: $showDeleteConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Continue", role: .destructive) {
-                    showFinalDeleteConfirm = true
+            .safeAreaInset(edge: .bottom) {
+                // Pinned so the destructive action is always reachable without
+                // scrolling to the bottom of a lazily-rendered Form. Confirmation
+                // is inline (no alert), which fires reliably from inside a sheet.
+                VStack(spacing: 8) {
+                    if confirmingDelete {
+                        Text("Delete this streak permanently? This can't be undone.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        HStack(spacing: 12) {
+                            Button {
+                                confirmingDelete = false
+                            } label: {
+                                Text("Cancel")
+                                    .font(.body.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button(role: .destructive) {
+                                if let s = streak { store.deleteStreak(s) }
+                                dismiss()
+                            } label: {
+                                Text("Delete forever")
+                                    .font(.body.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.red)
+                        }
+                    } else {
+                        Button(role: .destructive) {
+                            confirmingDelete = true
+                        } label: {
+                            Label("Delete streak", systemImage: "trash")
+                                .font(.body.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                    }
                 }
-            } message: {
-                Text("This will permanently remove the streak, its history, and any milestone messages.")
-            }
-            .alert(
-                "Are you sure?",
-                isPresented: $showFinalDeleteConfirm
-            ) {
-                Button("Cancel", role: .cancel) { }
-                Button("Delete forever", role: .destructive) {
-                    if let s = streak { store.deleteStreak(s) }
-                    dismiss()
-                }
-            } message: {
-                Text("\"\(streak?.name ?? "This streak")\" will be permanently deleted. This cannot be undone.")
-            }
-            .confirmationDialog(
-                "Clear all data for this streak?",
-                isPresented: $showClearDataConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Clear data", role: .destructive) {
-                    if let s = streak { store.clearStreakData(s) }
-                }
-            } message: {
-                Text("Resets your progress and re-locks any milestone messages. Name, notes, and colors are kept.")
+                .padding(.horizontal)
+                .padding(.vertical, 10)
+                .background(.bar)
             }
         }
     }
@@ -232,6 +282,17 @@ struct StreakCardSettingsSheet: View {
         guard let s = streak else { return }
         if notesDraft != s.notes {
             store.setNotes(notesDraft, for: s)
+        }
+    }
+
+    @ViewBuilder
+    private func statRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
         }
     }
 

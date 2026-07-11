@@ -59,10 +59,16 @@ struct Streak: Identifiable, Codable {
         self.milestoneMessages = try c.decodeIfPresent([MilestoneMessage].self, forKey: .milestoneMessages) ?? []
     }
 
-    static func dateKey(_ date: Date) -> String {
-        let day = Calendar.current.startOfDay(for: date)
+    // Cached: creating a DateFormatter per call is expensive, and dateKey is
+    // called once per day when scanning a streak's history.
+    private static let keyFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: day)
+        return formatter
+    }()
+
+    static func dateKey(_ date: Date) -> String {
+        let day = Calendar.current.startOfDay(for: date)
+        return keyFormatter.string(from: day)
     }
 }

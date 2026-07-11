@@ -103,6 +103,16 @@ struct StreakCardView: View {
                         .background(textColor.opacity(0.1))
                         .clipShape(Circle())
                 }
+                .overlay(alignment: .topTrailing) {
+                    if store.hasMissedDays(for: streak) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 13 * scale))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .red)
+                            .offset(x: 3 * scale, y: -3 * scale)
+                            .accessibilityLabel("Some past days were never filled out")
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
