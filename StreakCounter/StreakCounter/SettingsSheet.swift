@@ -15,6 +15,7 @@ struct SettingsSheet: View {
 
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showClearAllConfirm = false
+    @State private var showDeleteAccountConfirm = false
     @State private var addingReminder = false
     @State private var newReminderTime =
         Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date()) ?? Date()
@@ -30,6 +31,12 @@ struct SettingsSheet: View {
                         } label: {
                             Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
                         }
+                        Button(role: .destructive) {
+                            showDeleteAccountConfirm = true
+                        } label: {
+                            Label("Delete account", systemImage: "person.crop.circle.badge.minus")
+                        }
+                        .disabled(auth.isWorking)
                     } else if auth.isGuest {
                         guestRow
                         TextField(
@@ -231,6 +238,28 @@ struct SettingsSheet: View {
                         store.setBackgroundImage(data: data)
                     }
                 }
+            }
+            .confirmationDialog(
+                "Delete your account?",
+                isPresented: $showDeleteAccountConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Delete account", role: .destructive) {
+                    Task {
+                        // Pause syncing so the listener doesn't recreate the
+                        // cloud document while we're deleting it.
+                        store.stopSync()
+                        let deleted = await auth.deleteAccount()
+                        if deleted {
+                            dismiss()
+                        } else {
+                            store.resumeSync()
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Your account and all synced streak data will be permanently deleted. This cannot be undone. If you signed in a while ago, you may be asked to sign in once more to confirm it's you.")
             }
             .confirmationDialog(
                 "Clear data for all \(store.streaks.count) streak\(store.streaks.count == 1 ? "" : "s")?",

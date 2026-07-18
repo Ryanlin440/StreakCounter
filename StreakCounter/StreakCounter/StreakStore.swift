@@ -33,7 +33,8 @@ class StreakStore: ObservableObject {
 
     private let backgroundColorKey = "backgroundColor"
     private let cardSizeKey = "cardSize"
-    private let reminderTimesKey = "reminderTimes"
+    /// Also read by BackgroundRefresh, which reschedules reminders without a store.
+    static let reminderTimesKey = "reminderTimes"
 
     private var sync: FirestoreSync?
     private var authHandle: AuthStateDidChangeListenerHandle?
@@ -46,6 +47,8 @@ class StreakStore: ObservableObject {
         loadCardSize()
         loadReminderTimes()
         setupSync()
+        // Seed the widget on launch so it has data before the first change.
+        SharedStreakData.write(streaks: streaks)
     }
 
     deinit {
@@ -94,17 +97,31 @@ class StreakStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "streaks")
         UserDefaults.standard.removeObject(forKey: backgroundColorKey)
         UserDefaults.standard.removeObject(forKey: cardSizeKey)
-        UserDefaults.standard.removeObject(forKey: reminderTimesKey)
+        UserDefaults.standard.removeObject(forKey: Self.reminderTimesKey)
         try? FileManager.default.removeItem(at: backgroundImageURL)
 
+        SharedStreakData.clear()
         refreshNotifications()
+    }
+
+    /// Pause/resume the Firestore listener. Used while deleting the account
+    /// so the listener doesn't recreate the user document we just removed.
+    func stopSync() {
+        sync?.stop()
+    }
+
+    func resumeSync() {
+        if let uid = Auth.auth().currentUser?.uid {
+            sync?.start(for: uid)
+        }
     }
 
     func snapshotForSync() -> StreakStoreSnapshot {
         StreakStoreSnapshot(
             streaks: streaks,
             cardSize: cardSize,
-            backgroundColor: backgroundColor
+            backgroundColor: backgroundColor,
+            reminderTimes: reminderTimes
         )
     }
 
@@ -114,6 +131,10 @@ class StreakStore: ObservableObject {
         self.streaks = snapshot.streaks
         self.cardSize = snapshot.cardSize
         self.backgroundColor = snapshot.backgroundColor
+        if let times = snapshot.reminderTimes {
+            self.reminderTimes = times
+            saveReminderTimes()
+        }
 
         if let data = try? JSONEncoder().encode(streaks) {
             UserDefaults.standard.set(data, forKey: "streaks")
@@ -123,6 +144,7 @@ class StreakStore: ObservableObject {
         }
         UserDefaults.standard.set(cardSize, forKey: cardSizeKey)
 
+        SharedStreakData.write(streaks: streaks)
         refreshNotifications()
     }
 
@@ -281,10 +303,7 @@ class StreakStore: ObservableObject {
     /// back to Neutral re-increments the badge.
     /// Used for the app-icon badge and the nightly reminder text.
     var unfilledTodayCount: Int {
-        streaks.filter {
-            let status = status(for: Date(), on: $0)
-            return status == nil || status == .neutral
-        }.count
+        streaks.filter { $0.isUnfilledToday() }.count
     }
 
     /// Push the current badge count and daily reminders to the system.
@@ -311,23 +330,25 @@ class StreakStore: ObservableObject {
         reminderTimes.append(new)
         reminderTimes.sort { ($0.hour, $0.minute) < ($1.hour, $1.minute) }
         saveReminderTimes()
+        pushToCloud()
         refreshNotifications()
     }
 
     func removeReminderTimes(at offsets: IndexSet) {
         reminderTimes.remove(atOffsets: offsets)
         saveReminderTimes()
+        pushToCloud()
         refreshNotifications()
     }
 
     private func saveReminderTimes() {
         if let data = try? JSONEncoder().encode(reminderTimes) {
-            UserDefaults.standard.set(data, forKey: reminderTimesKey)
+            UserDefaults.standard.set(data, forKey: Self.reminderTimesKey)
         }
     }
 
     private func loadReminderTimes() {
-        guard let data = UserDefaults.standard.data(forKey: reminderTimesKey),
+        guard let data = UserDefaults.standard.data(forKey: Self.reminderTimesKey),
               let decoded = try? JSONDecoder().decode([ReminderTime].self, from: data) else {
             return
         }
@@ -365,35 +386,7 @@ class StreakStore: ObservableObject {
     }
 
     func currentStreak(for streak: Streak) -> Int {
-
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let todayStatus = streak.dayStatuses[Streak.dateKey(today)]
-
-        // Today explicitly marked as not done or neutral breaks the streak.
-        if todayStatus == .notDone || todayStatus == .neutral {
-            return 0
-        }
-
-        let doneDays = Set(streak.completedDates.map { calendar.startOfDay(for: $0) })
-
-        var anchor: Date
-        if doneDays.contains(today) {
-            anchor = today
-        } else if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
-                  doneDays.contains(yesterday) {
-            anchor = yesterday
-        } else {
-            return 0
-        }
-
-        var count = 1
-        while let prev = calendar.date(byAdding: .day, value: -1, to: anchor),
-              doneDays.contains(prev) {
-            count += 1
-            anchor = prev
-        }
-        return count
+        streak.currentStreakValue()
     }
 
     func longestStreak(for streak: Streak) -> Int {
@@ -664,6 +657,7 @@ class StreakStore: ObservableObject {
         if let data = try? JSONEncoder().encode(streaks) {
             UserDefaults.standard.set(data, forKey: "streaks")
         }
+        SharedStreakData.write(streaks: streaks)
         pushToCloud()
         refreshNotifications()
     }

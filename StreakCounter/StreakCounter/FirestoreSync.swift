@@ -14,6 +14,8 @@ struct StreakStoreSnapshot: Codable {
     var streaks: [Streak]
     var cardSize: Double
     var backgroundColor: CodableColor
+    /// Optional so documents written before reminder syncing still decode.
+    var reminderTimes: [ReminderTime]?
 }
 
 @MainActor

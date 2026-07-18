@@ -19,6 +19,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         // Receive notifications even while the app is in the foreground, so the
         // test notification (and nightly reminders) show up right away.
         UNUserNotificationCenter.current().delegate = self
+        // Background refresh keeps the badge and widget in sync with changes
+        // made on other devices while this app isn't running.
+        BackgroundRefresh.register()
+        BackgroundRefresh.schedule()
         return true
     }
 

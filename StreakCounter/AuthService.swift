@@ -9,6 +9,7 @@ import SwiftUI
 import Combine
 import FirebaseAuth
 import FirebaseCore
+import FirebaseFirestore
 import GoogleSignIn
 import AuthenticationServices
 import CryptoKit
@@ -26,6 +27,11 @@ final class AuthService: NSObject, ObservableObject {
 
     private var stateHandle: AuthStateDidChangeListenerHandle?
     private var currentNonce: String?
+
+    /// Set while account deletion is re-running Sign in with Apple to get a
+    /// fresh credential; the delegate resumes it instead of signing in.
+    private var appleReauthContinuation:
+        CheckedContinuation<(credential: AuthCredential, authorizationCode: String?), Error>?
 
     private let guestModeKey = "isGuestMode"
     private let guestEmailKey = "guestEmail"
@@ -144,6 +150,106 @@ final class AuthService: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Account deletion
+
+    /// Permanently deletes the user's synced data and their Firebase account.
+    ///
+    /// Deletes immediately when the login is recent. Firebase refuses to
+    /// delete an account with a stale login, so only in that case is the
+    /// user re-authenticated first. Returns true if the account was deleted.
+    @MainActor
+    func deleteAccount() async -> Bool {
+        guard let user = Auth.auth().currentUser else { return false }
+
+        isWorking = true
+        defer { isWorking = false }
+
+        do {
+            // Remove the synced data first (only possible while still signed
+            // in — Firestore rules require the matching uid), then the account.
+            try await Firestore.firestore().collection("users").document(user.uid).delete()
+
+            do {
+                try await user.delete()
+            } catch let error as NSError
+                where error.domain == AuthErrorDomain
+                    && error.code == AuthErrorCode.requiresRecentLogin.rawValue {
+                try await reauthenticate(user)
+                try await user.delete()
+            }
+
+            GIDSignIn.sharedInstance.signOut()
+            return true
+        } catch {
+            let nsError = error as NSError
+            let cancelledApple = nsError.domain == ASAuthorizationErrorDomain
+                && nsError.code == ASAuthorizationError.canceled.rawValue
+            let cancelledGoogle = nsError.domain == kGIDSignInErrorDomain
+                && nsError.code == GIDSignInError.canceled.rawValue
+            if !cancelledApple && !cancelledGoogle {
+                errorMessage = error.localizedDescription
+            }
+            return false
+        }
+    }
+
+    /// Confirms the user's identity with their original provider. For Apple,
+    /// the fresh authorization code also lets us revoke the Apple token,
+    /// which App Review requires when deleting Sign in with Apple accounts.
+    @MainActor
+    private func reauthenticate(_ user: User) async throws {
+        if user.providerData.contains(where: { $0.providerID == "apple.com" }) {
+            let result = try await requestAppleReauthorization()
+            try await user.reauthenticate(with: result.credential)
+            if let code = result.authorizationCode {
+                try await Auth.auth().revokeToken(withAuthorizationCode: code)
+            }
+        } else if user.providerData.contains(where: { $0.providerID == "google.com" }) {
+            guard let rootVC = Self.topMostViewController() else {
+                throw NSError(
+                    domain: "AuthService",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Could not find a window to present sign-in."]
+                )
+            }
+            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: rootVC)
+            guard let idToken = result.user.idToken?.tokenString else {
+                throw NSError(
+                    domain: "AuthService",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Missing Google ID token."]
+                )
+            }
+            let credential = GoogleAuthProvider.credential(
+                withIDToken: idToken,
+                accessToken: result.user.accessToken.tokenString
+            )
+            try await user.reauthenticate(with: credential)
+        }
+    }
+
+    /// Runs the Sign in with Apple flow and returns the Firebase credential
+    /// plus the authorization code needed to revoke the Apple token.
+    @MainActor
+    private func requestAppleReauthorization() async throws
+        -> (credential: AuthCredential, authorizationCode: String?) {
+        try await withCheckedThrowingContinuation { continuation in
+            appleReauthContinuation = continuation
+
+            let nonce = Self.randomNonceString()
+            currentNonce = nonce
+
+            let provider = ASAuthorizationAppleIDProvider()
+            let request = provider.createRequest()
+            request.nonce = Self.sha256(nonce)
+
+            let controller = ASAuthorizationController(authorizationRequests: [request])
+            controller.delegate = self
+            controller.presentationContextProvider = self
+            controller.performRequests()
+        }
+    }
+
     @MainActor
     private func firebaseSignIn(with gidUser: GIDGoogleUser) async {
         guard let idToken = gidUser.idToken?.tokenString else {
@@ -222,6 +328,15 @@ extension AuthService: ASAuthorizationControllerDelegate, ASAuthorizationControl
               let nonce = currentNonce,
               let appleIDToken = appleIDCredential.identityToken,
               let idTokenString = String(data: appleIDToken, encoding: .utf8) else {
+            if let continuation = appleReauthContinuation {
+                appleReauthContinuation = nil
+                continuation.resume(throwing: NSError(
+                    domain: "AuthService",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Apple sign-in did not return a valid token."]
+                ))
+                return
+            }
             Task { @MainActor in
                 self.errorMessage = "Apple sign-in did not return a valid token."
             }
@@ -233,6 +348,15 @@ extension AuthService: ASAuthorizationControllerDelegate, ASAuthorizationControl
             rawNonce: nonce,
             fullName: appleIDCredential.fullName
         )
+
+        // Account deletion re-auth: hand the credential back instead of signing in.
+        if let continuation = appleReauthContinuation {
+            appleReauthContinuation = nil
+            let authorizationCode = appleIDCredential.authorizationCode
+                .flatMap { String(data: $0, encoding: .utf8) }
+            continuation.resume(returning: (credential, authorizationCode))
+            return
+        }
 
         Task { @MainActor in
             do {
@@ -247,6 +371,11 @@ extension AuthService: ASAuthorizationControllerDelegate, ASAuthorizationControl
         controller: ASAuthorizationController,
         didCompleteWithError error: Error
     ) {
+        if let continuation = appleReauthContinuation {
+            appleReauthContinuation = nil
+            continuation.resume(throwing: error)
+            return
+        }
         Task { @MainActor in
             self.isWorking = false
             // Don't surface cancellations as an error.

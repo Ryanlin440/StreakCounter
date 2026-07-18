@@ -47,6 +47,8 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 store.refreshNotifications()
+            } else if newPhase == .background {
+                BackgroundRefresh.schedule()
             }
         }
     }

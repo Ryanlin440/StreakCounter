@@ -72,3 +72,48 @@ struct Streak: Identifiable, Codable {
         return keyFormatter.string(from: day)
     }
 }
+
+// Pure streak math, kept on the model (instead of StreakStore) so the
+// widget extension can compute counts without the store or Firestore.
+extension Streak {
+
+    /// Consecutive days marked Done, ending today or yesterday.
+    func currentStreakValue(asOf now: Date = Date()) -> Int {
+
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        let todayStatus = dayStatuses[Streak.dateKey(today)]
+
+        // Today explicitly marked as not done or neutral breaks the streak.
+        if todayStatus == .notDone || todayStatus == .neutral {
+            return 0
+        }
+
+        let doneDays = Set(completedDates.map { calendar.startOfDay(for: $0) })
+
+        var anchor: Date
+        if doneDays.contains(today) {
+            anchor = today
+        } else if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
+                  doneDays.contains(yesterday) {
+            anchor = yesterday
+        } else {
+            return 0
+        }
+
+        var count = 1
+        while let prev = calendar.date(byAdding: .day, value: -1, to: anchor),
+              doneDays.contains(prev) {
+            count += 1
+            anchor = prev
+        }
+        return count
+    }
+
+    /// True while the streak hasn't been meaningfully filled out today:
+    /// no status yet, or still on the default Neutral.
+    func isUnfilledToday(asOf now: Date = Date()) -> Bool {
+        let status = dayStatuses[Streak.dateKey(now)]
+        return status == nil || status == .neutral
+    }
+}
