@@ -321,6 +321,10 @@ struct StreakCardSettingsSheet: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            if message.openedAt == nil {
+                Image(systemName: "questionmark.circle.fill")
+                    .foregroundColor(.orange)
+            }
             Image(systemName: "chevron.right")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
