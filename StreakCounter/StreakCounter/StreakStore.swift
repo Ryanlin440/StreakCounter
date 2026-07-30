@@ -204,6 +204,18 @@ class StreakStore: ObservableObject {
         save()
     }
 
+    /// Records that the user read an unlocked message, which hides the
+    /// envelope indicator on the card front.
+    func markMilestoneMessageOpened(id: UUID, for streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }),
+              let msgIndex = streaks[index].milestoneMessages.firstIndex(where: { $0.id == id }),
+              streaks[index].milestoneMessages[msgIndex].isUnlocked,
+              streaks[index].milestoneMessages[msgIndex].openedAt == nil
+        else { return }
+        streaks[index].milestoneMessages[msgIndex].openedAt = Date()
+        save()
+    }
+
     func clearStreakData(_ streak: Streak) {
         guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
         streaks[index].completedDates = []
@@ -211,6 +223,7 @@ class StreakStore: ObservableObject {
         streaks[index].startDate = Date()
         for i in streaks[index].milestoneMessages.indices {
             streaks[index].milestoneMessages[i].unlockedAt = nil
+            streaks[index].milestoneMessages[i].openedAt = nil
         }
         save()
     }
@@ -222,6 +235,7 @@ class StreakStore: ObservableObject {
             streaks[i].startDate = Date()
             for j in streaks[i].milestoneMessages.indices {
                 streaks[i].milestoneMessages[j].unlockedAt = nil
+                streaks[i].milestoneMessages[j].openedAt = nil
             }
         }
         save()

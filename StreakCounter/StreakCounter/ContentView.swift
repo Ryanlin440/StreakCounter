@@ -22,6 +22,9 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var flameGlow = false
     @State private var pendingDelete: Streak?
+    /// The streak whose calendar is being shown, pushed programmatically so
+    /// only the calendar button (not the whole card row) opens it.
+    @State private var calendarStreakID: UUID?
 
     var body: some View {
         Group {
@@ -241,7 +244,8 @@ struct ContentView: View {
                     StreakListRow(
                         streak: streak,
                         store: store,
-                        pendingDelete: $pendingDelete
+                        pendingDelete: $pendingDelete,
+                        calendarStreakID: $calendarStreakID
                     )
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -262,6 +266,9 @@ struct ContentView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
+        .navigationDestination(item: $calendarStreakID) { streakID in
+            StreakCalendarView(streakID: streakID, store: store)
+        }
         .alert(
             "Delete \"\(pendingDelete?.name ?? "this streak")\"?",
             isPresented: Binding(
@@ -380,6 +387,7 @@ private struct StreakListRow: View {
     let streak: Streak
     @ObservedObject var store: StreakStore
     @Binding var pendingDelete: Streak?
+    @Binding var calendarStreakID: UUID?
 
     @Environment(\.editMode) private var editMode
 
@@ -400,8 +408,14 @@ private struct StreakListRow: View {
                 }
                 .buttonStyle(.borderless)
             }
-            StreakCardView(streak: streak, store: store)
+            StreakCardView(streak: streak, store: store) {
+                calendarStreakID = streak.id
+            }
         }
+        // Only allow reordering in edit mode. Otherwise the List's
+        // long-press row drag competes with the slide gesture on the
+        // card's status control.
+        .moveDisabled(!isEditing)
     }
 }
 

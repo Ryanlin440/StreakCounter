@@ -9,6 +9,11 @@ struct StreakCardView: View {
 
     let streak: Streak
     @ObservedObject var store: StreakStore
+    /// Called when the user taps the calendar button. Navigation is owned by
+    /// the list (via `navigationDestination(item:)`) so the card doesn't need
+    /// a NavigationLink, which would make the whole List row tappable and
+    /// draw a disclosure chevron.
+    var onOpenCalendar: () -> Void = {}
     @EnvironmentObject private var auth: AuthService
 
     @State private var showCardSettings = false
@@ -26,7 +31,7 @@ struct StreakCardView: View {
     }
 
     private var hasUnlockedUnseenMessage: Bool {
-        streak.milestoneMessages.contains { $0.isUnlocked }
+        streak.milestoneMessages.contains { $0.isUnlocked && $0.openedAt == nil }
     }
 
     var body: some View {
@@ -83,19 +88,14 @@ struct StreakCardView: View {
             }
 
             HStack(spacing: 8 * scale) {
-                ForEach(DayStatus.allCases, id: \.self) { status in
-                    StatusButton(
-                        status: status,
-                        isSelected: todayStatusForDisplay == status,
-                        scale: scale
-                    ) {
-                        store.setStatus(status, for: Date(), on: streak)
-                    }
+                StatusSegmentedControl(
+                    current: todayStatusForDisplay,
+                    scale: scale
+                ) { status in
+                    store.setStatus(status, for: Date(), on: streak)
                 }
 
-                NavigationLink {
-                    StreakCalendarView(streakID: streak.id, store: store)
-                } label: {
+                Button(action: onOpenCalendar) {
                     Image(systemName: "calendar")
                         .font(.system(size: 18 * scale))
                         .foregroundColor(textColor)
@@ -103,6 +103,7 @@ struct StreakCardView: View {
                         .background(textColor.opacity(0.1))
                         .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
                 .overlay(alignment: .topTrailing) {
                     if store.hasMissedDays(for: streak) {
                         Image(systemName: "exclamationmark.circle.fill")
@@ -160,24 +161,144 @@ struct StreakCardView: View {
     }
 }
 
-struct StatusButton: View {
+/// A fused three-state segmented control for today's status: Wrong / Clear /
+/// Right. The active segment gets its color theme and a soft matching glow;
+/// the other two drop to a dim secondary look with a transparent background.
+struct StatusSegmentedControl: View {
 
-    let status: DayStatus
-    let isSelected: Bool
+    /// The store-backed status this control mirrors (defaults to Neutral
+    /// upstream when no status has been set for today).
+    let current: DayStatus
     var scale: CGFloat = 1.0
-    var action: () -> Void
+    var onSelect: (DayStatus) -> Void
+
+    // Middle "Clear" is the default until the store's value arrives.
+    @State private var selection: DayStatus = .neutral
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: status.symbol)
-                .font(.system(size: 17 * scale, weight: .bold))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8 * scale)
-                .background(isSelected ? Color.gray.opacity(0.5) : status.color)
-                .clipShape(Capsule())
+        GeometryReader { proxy in
+            HStack(spacing: 4 * scale) {
+                ForEach(DayStatus.allCases, id: \.self) { status in
+                    segment(for: status)
+                }
+            }
+            // No inset at all: the segment capsules run edge-to-edge, so the
+            // x hugs the container's left curve, the checkmark its right
+            // curve, and every segment spans the full height.
+            // Container look: tweak the grey shade (.systemGray2–6) and the
+            // opacity (0 = invisible, 1 = solid) here.
+            .background(Color(.systemGray3).opacity(0.3))
+            .clipShape(Capsule())
+            .contentShape(Capsule())
+            // A single tap selects the segment under the finger. Handled
+            // here on the container rather than by the segment Buttons,
+            // whose taps the List row swallows in favor of the drag below.
+            .gesture(
+                SpatialTapGesture()
+                    .onEnded { value in
+                        select(status(atX: value.location.x, width: proxy.size.width))
+                    }
+            )
+            // Slide across the control to change the selection live; the
+            // store is only updated once, when the finger lifts. High
+            // priority so drags that start on a segment button aren't
+            // claimed by the button — the highlight then follows the
+            // finger into each segment it crosses.
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 10)
+                    .onChanged { value in
+                        let status = status(atX: value.location.x, width: proxy.size.width)
+                        if status != selection {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                selection = status
+                            }
+                        }
+                    }
+                    .onEnded { value in
+                        select(status(atX: value.location.x, width: proxy.size.width))
+                    }
+            )
+        }
+        // The control's overall height: every segment stretches to fill it
+        // exactly, regardless of each symbol's own glyph height.
+        .frame(height: 36 * scale)
+        .onAppear { selection = current }
+        // Keep in sync with changes made elsewhere (calendar, other devices).
+        .onChange(of: current) { _, newValue in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                selection = newValue
+            }
+        }
+    }
+
+    /// Animate the selection to `status` and commit it to the store.
+    private func select(_ status: DayStatus) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            selection = status
+        }
+        onSelect(status)
+    }
+
+    /// The segment under a horizontal position, for slide-to-select.
+    private func status(atX x: CGFloat, width: CGFloat) -> DayStatus {
+        let all = DayStatus.allCases
+        guard width > 0 else { return selection }
+        let index = Int(x / (width / CGFloat(all.count)))
+        return all[min(all.count - 1, max(0, index))]
+    }
+
+    @ViewBuilder
+    private func segment(for status: DayStatus) -> some View {
+        let isSelected = selection == status
+        Button {
+            select(status)
+        } label: {
+            Image(systemName: status.segmentSymbol)
+                .font(.system(size: 14 * scale, weight: .bold))
+                .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.6))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background {
+                    if isSelected {
+                        Capsule()
+                            .fill(status.segmentColor)
+                            .shadow(
+                                color: status.segmentColor.opacity(0.5),
+                                radius: 5 * scale,
+                                x: 0,
+                                y: 2 * scale
+                            )
+                    }
+                }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(status.displayName)
+        .accessibilityLabel(status.segmentTitle)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private extension DayStatus {
+
+    var segmentTitle: String {
+        switch self {
+        case .notDone: return "Wrong"
+        case .neutral: return "Clear"
+        case .done: return "Right"
+        }
+    }
+
+    var segmentSymbol: String {
+        switch self {
+        case .notDone: return "xmark"
+        case .neutral: return "circle"
+        case .done: return "checkmark"
+        }
+    }
+
+    var segmentColor: Color {
+        switch self {
+        case .notDone: return Color(.systemRed)
+        case .neutral: return Color(.systemGray2)
+        case .done: return Color(.systemGreen)
+        }
     }
 }

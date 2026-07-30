@@ -24,6 +24,10 @@ struct StreakCardSettingsSheet: View {
     @State private var confirmingDelete = false
     @State private var showAddMessage = false
     @State private var viewingMessage: MilestoneMessage?
+    /// Marked as opened only after the detail sheet closes — writing to the
+    /// store while the sheet is presenting re-renders the Form mid-animation
+    /// and makes the first tap unreliable.
+    @State private var pendingOpenedMessageID: UUID?
 
     init(streakID: UUID, store: StreakStore) {
         self.streakID = streakID
@@ -89,6 +93,7 @@ struct StreakCardSettingsSheet: View {
                         } else {
                             ForEach(streak.milestoneMessages) { msg in
                                 Button {
+                                    pendingOpenedMessageID = msg.id
                                     viewingMessage = msg
                                 } label: {
                                     milestoneRow(message: msg)
@@ -211,7 +216,12 @@ struct StreakCardSettingsSheet: View {
                     AddMilestoneMessageSheet(streak: s, store: store)
                 }
             }
-            .sheet(item: $viewingMessage) { msg in
+            .sheet(item: $viewingMessage, onDismiss: {
+                if let id = pendingOpenedMessageID, let s = streak {
+                    store.markMilestoneMessageOpened(id: id, for: s)
+                }
+                pendingOpenedMessageID = nil
+            }) { msg in
                 MilestoneMessageDetailSheet(
                     message: msg,
                     streakName: streak?.name ?? ""
@@ -315,6 +325,9 @@ struct StreakCardSettingsSheet: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
+        // Plain buttons in a Form only hit-test their visible content, so
+        // without this the gap around the Spacer ignores taps.
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
