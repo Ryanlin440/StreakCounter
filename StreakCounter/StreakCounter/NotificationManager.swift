@@ -32,7 +32,19 @@ enum NotificationManager {
 
     /// How many future days we pre-schedule as a safety net for days the
     /// app isn't opened. Refreshed every time the app is used.
-    private static let scheduledDayCount = 7
+    static let scheduledDayCount = 7
+
+    /// How many streaks still need attention on each of the upcoming days
+    /// (index 0 = today). Type-aware: a weekly streak on an off-day, or one
+    /// whose week is already complete, doesn't count.
+    static func unfilledCounts(for streaks: [Streak]) -> [Int] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        return (0...scheduledDayCount).map { offset in
+            guard let day = calendar.date(byAdding: .day, value: offset, to: today) else { return 0 }
+            return streaks.filter { $0.isUnfilled(on: day) }.count
+        }
+    }
 
     private static let reminderIdentifierPrefix = "streak-reminder-"
     private static let legacyReminderIdentifierPrefix = "streak-nightly-reminder-"
@@ -58,14 +70,15 @@ enum NotificationManager {
     /// Rebuilds the schedule of daily reminders and midnight badge refreshes.
     ///
     /// - Each user-chosen time gets a reminder scheduled for the next few days.
-    ///   Today's reminder is only scheduled if the user still has streaks to
-    ///   fill out (and the time hasn't already passed).
+    ///   A day's reminder is only scheduled if that day is expected to have
+    ///   streaks needing attention (`unfilledCounts`, index = day offset) —
+    ///   so a week where every streak is scheduled off, or already complete,
+    ///   stays quiet.
     /// - Just after each upcoming midnight a silent, badge-only notification
-    ///   resets the app-icon badge to the full streak count, since a new day
-    ///   starts with every streak unfilled.
+    ///   sets the app-icon badge to that day's expected unfilled count.
     static func refreshReminders(
         times: [ReminderTime],
-        unfilledToday: Int,
+        unfilledCounts: [Int],
         totalStreaks: Int
     ) async {
         let center = UNUserNotificationCenter.current()
@@ -84,6 +97,7 @@ enum NotificationManager {
 
         let calendar = Calendar.current
         let now = Date()
+        let unfilledToday = unfilledCounts.first ?? 0
 
         for time in times {
             for dayOffset in 0..<scheduledDayCount {
@@ -95,11 +109,12 @@ enum NotificationManager {
 
                 guard let fireDate = calendar.date(from: components) else { continue }
 
-                // Today: only remind if there's something left to do and the time is still ahead.
-                if dayOffset == 0 {
-                    if unfilledToday == 0 { continue }
-                    if fireDate <= now { continue }
-                }
+                // Skip days with nothing expected to do (off-days of weekday
+                // schedules, or weeks/months already complete).
+                if dayOffset < unfilledCounts.count, unfilledCounts[dayOffset] == 0 { continue }
+
+                // Today: only remind if the time is still ahead.
+                if dayOffset == 0, fireDate <= now { continue }
 
                 let content = UNMutableNotificationContent()
                 content.title = "Keep your streaks alive 🔥"
@@ -131,9 +146,10 @@ enum NotificationManager {
             }
         }
 
-        // Silent badge refresh just after each upcoming midnight. A new day
-        // starts with every streak unfilled, so the badge becomes the total
-        // streak count without the app having to run.
+        // Silent badge refresh just after each upcoming midnight, set to the
+        // number of streaks expected to need attention that day (type- and
+        // schedule-aware) so the badge tracks the new day without the app
+        // having to run.
         for dayOffset in 1...scheduledDayCount {
             guard let day = calendar.date(byAdding: .day, value: dayOffset, to: now) else { continue }
 
@@ -147,7 +163,10 @@ enum NotificationManager {
             let content = UNMutableNotificationContent()
             // No title, body, or sound: iOS delivers this silently and only
             // updates the badge.
-            content.badge = NSNumber(value: totalStreaks)
+            let badgeCount = dayOffset < unfilledCounts.count
+                ? unfilledCounts[dayOffset]
+                : totalStreaks
+            content.badge = NSNumber(value: badgeCount)
 
             let trigger = UNCalendarNotificationTrigger(
                 dateMatching: calendar.dateComponents(
@@ -168,9 +187,9 @@ enum NotificationManager {
     }
 
     /// Convenience: refresh both the badge and the scheduled reminders at once.
-    static func refresh(times: [ReminderTime], unfilledToday: Int, totalStreaks: Int) async {
-        await updateBadge(unfilledCount: unfilledToday)
-        await refreshReminders(times: times, unfilledToday: unfilledToday, totalStreaks: totalStreaks)
+    static func refresh(times: [ReminderTime], unfilledCounts: [Int], totalStreaks: Int) async {
+        await updateBadge(unfilledCount: unfilledCounts.first ?? 0)
+        await refreshReminders(times: times, unfilledCounts: unfilledCounts, totalStreaks: totalStreaks)
     }
 
     // MARK: - Test notification

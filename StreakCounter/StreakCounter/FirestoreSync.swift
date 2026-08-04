@@ -16,6 +16,13 @@ struct StreakStoreSnapshot: Codable {
     var backgroundColor: CodableColor
     /// Optional so documents written before reminder syncing still decode.
     var reminderTimes: [ReminderTime]?
+    /// Display preferences, stored as raw values. Optional so documents
+    /// written before these existed still decode (nil = keep local).
+    /// NOTE: app versions without streak types re-encode snapshots without
+    /// the new Streak fields — last-write-wins means an old client can drop
+    /// them. Acceptable for same-version fleets.
+    var sortMode: String?
+    var cardLayout: String?
 }
 
 @MainActor

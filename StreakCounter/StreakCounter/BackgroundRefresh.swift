@@ -74,10 +74,10 @@ enum BackgroundRefresh {
         SharedStreakData.write(streaks: snapshot.streaks)
 
         let times = snapshot.reminderTimes ?? storedReminderTimes()
-        let unfilled = snapshot.streaks.filter { $0.isUnfilledToday() }.count
+        let counts = NotificationManager.unfilledCounts(for: snapshot.streaks)
         await NotificationManager.refresh(
             times: times,
-            unfilledToday: unfilled,
+            unfilledCounts: counts,
             totalStreaks: snapshot.streaks.count
         )
     }

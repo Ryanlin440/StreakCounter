@@ -11,6 +11,49 @@ import SwiftUI
 import UIKit
 import FirebaseAuth
 
+/// How the main page organizes streak cards.
+enum StreakSortMode: String, Codable, CaseIterable, Identifiable {
+    case groupedByType
+    case manual
+    case alphabetical
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .groupedByType: return "By Type"
+        case .manual: return "Custom Order"
+        case .alphabetical: return "Alphabetical"
+        }
+    }
+}
+
+/// Card shape on the main page: full-width rows (the original "triangle"
+/// design) or a two-column grid of square cards.
+enum CardLayout: String, Codable, CaseIterable, Identifiable {
+    case fullWidth
+    case grid
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .fullWidth: return "Triangle"
+        case .grid: return "Square"
+        }
+    }
+}
+
+/// A group of cards on the main page. `type` is nil for the single
+/// unsectioned group used by the manual/alphabetical sort modes.
+struct StreakSection: Identifiable {
+    let type: StreakType?
+    let streaks: [Streak]
+
+    var id: String { type?.rawValue ?? "all" }
+    var title: String? { type?.displayName }
+}
+
 @MainActor
 class StreakStore: ObservableObject {
 
@@ -24,6 +67,11 @@ class StreakStore: ObservableObject {
     @Published var cardSize: Double = 1.0
     /// Times of day the user wants daily reminders. Stored on-device.
     @Published var reminderTimes: [ReminderTime] = NotificationManager.defaultReminderTimes
+    /// The day the main page is showing/editing. Defaults to today and is
+    /// never persisted — reopening the app always starts on today.
+    @Published var selectedDate: Date = Calendar.current.startOfDay(for: Date())
+    @Published var sortMode: StreakSortMode = .groupedByType
+    @Published var cardLayout: CardLayout = .fullWidth
 
     static let defaultCardSize: Double = 1.0
 
@@ -33,6 +81,8 @@ class StreakStore: ObservableObject {
 
     private let backgroundColorKey = "backgroundColor"
     private let cardSizeKey = "cardSize"
+    private let sortModeKey = "sortMode"
+    private let cardLayoutKey = "cardLayout"
     /// Also read by BackgroundRefresh, which reschedules reminders without a store.
     static let reminderTimesKey = "reminderTimes"
 
@@ -46,6 +96,7 @@ class StreakStore: ObservableObject {
         loadBackgroundColor()
         loadCardSize()
         loadReminderTimes()
+        loadDisplayPreferences()
         setupSync()
         // Seed the widget on launch so it has data before the first change.
         SharedStreakData.write(streaks: streaks)
@@ -93,11 +144,16 @@ class StreakStore: ObservableObject {
         backgroundColor = .appBackground
         backgroundImageData = nil
         reminderTimes = NotificationManager.defaultReminderTimes
+        sortMode = .groupedByType
+        cardLayout = .fullWidth
+        selectedDate = Calendar.current.startOfDay(for: Date())
 
         UserDefaults.standard.removeObject(forKey: "streaks")
         UserDefaults.standard.removeObject(forKey: backgroundColorKey)
         UserDefaults.standard.removeObject(forKey: cardSizeKey)
         UserDefaults.standard.removeObject(forKey: Self.reminderTimesKey)
+        UserDefaults.standard.removeObject(forKey: sortModeKey)
+        UserDefaults.standard.removeObject(forKey: cardLayoutKey)
         try? FileManager.default.removeItem(at: backgroundImageURL)
 
         SharedStreakData.clear()
@@ -121,7 +177,9 @@ class StreakStore: ObservableObject {
             streaks: streaks,
             cardSize: cardSize,
             backgroundColor: backgroundColor,
-            reminderTimes: reminderTimes
+            reminderTimes: reminderTimes,
+            sortMode: sortMode.rawValue,
+            cardLayout: cardLayout.rawValue
         )
     }
 
@@ -134,6 +192,16 @@ class StreakStore: ObservableObject {
         if let times = snapshot.reminderTimes {
             self.reminderTimes = times
             saveReminderTimes()
+        }
+        // Snapshots from app versions without display preferences leave the
+        // local settings untouched.
+        if let raw = snapshot.sortMode, let mode = StreakSortMode(rawValue: raw) {
+            self.sortMode = mode
+            UserDefaults.standard.set(raw, forKey: sortModeKey)
+        }
+        if let raw = snapshot.cardLayout, let layout = CardLayout(rawValue: raw) {
+            self.cardLayout = layout
+            UserDefaults.standard.set(raw, forKey: cardLayoutKey)
         }
 
         if let data = try? JSONEncoder().encode(streaks) {
@@ -148,19 +216,78 @@ class StreakStore: ObservableObject {
         refreshNotifications()
     }
 
+    // MARK: - Selected date
+
+    /// Change the day the main page shows/edits. Future days are clamped
+    /// to today — history can be corrected, but not written ahead of time.
+    func selectDate(_ date: Date) {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let today = calendar.startOfDay(for: Date())
+        selectedDate = min(day, today)
+    }
+
+    var isViewingToday: Bool {
+        Calendar.current.isDate(selectedDate, inSameDayAs: Date())
+    }
+
+    // MARK: - Sections & sorting
+
+    /// The card groups shown on the main page and in Statistics.
+    var sectionedStreaks: [StreakSection] {
+        guard !streaks.isEmpty else { return [] }
+        switch sortMode {
+        case .groupedByType:
+            return StreakType.displayOrder.compactMap { type in
+                let group = streaks.filter { $0.type == type }
+                return group.isEmpty ? nil : StreakSection(type: type, streaks: group)
+            }
+        case .manual:
+            return [StreakSection(type: nil, streaks: streaks)]
+        case .alphabetical:
+            let sorted = streaks.sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+            return [StreakSection(type: nil, streaks: sorted)]
+        }
+    }
+
+    /// Sections always grouped by type, regardless of the user's sort mode.
+    /// Used by the Statistics page, which is organized by category.
+    var typeGroupedStreaks: [StreakSection] {
+        StreakType.displayOrder.compactMap { type in
+            let group = streaks.filter { $0.type == type }
+            return group.isEmpty ? nil : StreakSection(type: type, streaks: group)
+        }
+    }
+
+    func setSortMode(_ mode: StreakSortMode) {
+        sortMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: sortModeKey)
+        pushToCloud()
+    }
+
+    func setCardLayout(_ layout: CardLayout) {
+        cardLayout = layout
+        UserDefaults.standard.set(layout.rawValue, forKey: cardLayoutKey)
+        pushToCloud()
+    }
+
+    private func loadDisplayPreferences() {
+        if let raw = UserDefaults.standard.string(forKey: sortModeKey),
+           let mode = StreakSortMode(rawValue: raw) {
+            sortMode = mode
+        }
+        if let raw = UserDefaults.standard.string(forKey: cardLayoutKey),
+           let layout = CardLayout(rawValue: raw) {
+            cardLayout = layout
+        }
+    }
+
     // MARK: - Streak CRUD
 
-    func addStreak(name: String) {
-
-        let streak = Streak(
-            id: UUID(),
-            name: name,
-            startDate: Date(),
-            completedDates: [],
-            dayStatuses: [:],
-            cardColor: .white
-        )
-
+    /// Add a fully-configured streak built by the creation screen.
+    func addStreak(_ streak: Streak) {
         streaks.append(streak)
         save()
     }
@@ -220,6 +347,8 @@ class StreakStore: ObservableObject {
         guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
         streaks[index].completedDates = []
         streaks[index].dayStatuses = [:]
+        streaks[index].dayCounts = [:]
+        streaks[index].dayNotes = [:]
         streaks[index].startDate = Date()
         for i in streaks[index].milestoneMessages.indices {
             streaks[index].milestoneMessages[i].unlockedAt = nil
@@ -232,6 +361,8 @@ class StreakStore: ObservableObject {
         for i in streaks.indices {
             streaks[i].completedDates = []
             streaks[i].dayStatuses = [:]
+            streaks[i].dayCounts = [:]
+            streaks[i].dayNotes = [:]
             streaks[i].startDate = Date()
             for j in streaks[i].milestoneMessages.indices {
                 streaks[i].milestoneMessages[j].unlockedAt = nil
@@ -246,6 +377,23 @@ class StreakStore: ObservableObject {
         guard let index = streaks.firstIndex(where: {
             $0.id == streak.id
         }) else {
+            return
+        }
+
+        // Scheduling rules: off-days of a specific-weekday streak can't be
+        // marked at all.
+        guard streaks[index].isActive(on: date) else { return }
+
+        // Multiple Times a Day statuses are derived from counts, so route
+        // through the count so the two never disagree.
+        if streaks[index].type == .multipleDaily {
+            switch status {
+            case .done:
+                let target = streaks[index].dailyTarget
+                setCount(max(streaks[index].count(on: date), target), for: date, on: streaks[index])
+            case .neutral, .notDone:
+                setCount(0, for: date, on: streaks[index])
+            }
             return
         }
 
@@ -265,6 +413,86 @@ class StreakStore: ObservableObject {
         }
 
         unlockMilestonesIfNeeded(at: index)
+        save()
+    }
+
+    // MARK: - Multiple Times a Day counts
+
+    /// Set the completion count for a day, clamped to >= 0. The day's
+    /// status and completedDates entry are re-derived from the count so
+    /// all existing streak math keeps working.
+    func setCount(_ count: Int, for date: Date, on streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
+        let clamped = max(0, count)
+        let key = Streak.dateKey(date)
+        streaks[index].dayCounts[key] = clamped == 0 ? nil : clamped
+        rederiveMultiStatus(at: index, for: date)
+        unlockMilestonesIfNeeded(at: index)
+        save()
+    }
+
+    func incrementCount(for date: Date, on streak: Streak) {
+        setCount(streak.count(on: date) + 1, for: date, on: streak)
+    }
+
+    func decrementCount(for date: Date, on streak: Streak) {
+        setCount(streak.count(on: date) - 1, for: date, on: streak)
+    }
+
+    /// count >= target → Done; partial → Neutral; zero → no status.
+    private func rederiveMultiStatus(at index: Int, for date: Date) {
+        let key = Streak.dateKey(date)
+        let count = streaks[index].dayCounts[key] ?? 0
+        let target = max(1, streaks[index].dailyTarget)
+        if count >= target {
+            streaks[index].dayStatuses[key] = .done
+            if !streaks[index].completedDates.contains(where: {
+                Calendar.current.isDate($0, inSameDayAs: date)
+            }) {
+                streaks[index].completedDates.append(date)
+            }
+        } else {
+            streaks[index].dayStatuses[key] = count > 0 ? .neutral : nil
+            streaks[index].completedDates.removeAll {
+                Calendar.current.isDate($0, inSameDayAs: date)
+            }
+        }
+    }
+
+    /// Change the daily target and re-derive every recorded day against it,
+    /// so history reflects the new goal (documented behavior).
+    func setDailyTarget(_ target: Int, for streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
+        streaks[index].dailyTarget = max(1, target)
+        let keys = Set(streaks[index].dayCounts.keys).union(streaks[index].dayStatuses.keys)
+        for key in keys {
+            guard let date = Streak.date(fromKey: key) else { continue }
+            rederiveMultiStatus(at: index, for: date)
+        }
+        unlockMilestonesIfNeeded(at: index)
+        save()
+    }
+
+    // MARK: - Weekly/monthly goals
+
+    /// Update a weekly/monthly streak's goal. Past periods are re-evaluated
+    /// against the new goal (documented behavior — schedule history isn't kept).
+    func setGoal(mode: GoalMode, weekdays: [Int], periodTarget: Int, for streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
+        streaks[index].goalMode = mode
+        streaks[index].scheduledWeekdays = weekdays.filter { (1...7).contains($0) }.sorted()
+        streaks[index].periodTarget = max(1, periodTarget)
+        unlockMilestonesIfNeeded(at: index)
+        save()
+    }
+
+    // MARK: - Day notes
+
+    /// Set or clear (empty string) the note attached to a specific day.
+    func setDayNote(_ note: String, for date: Date, on streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        streaks[index].dayNotes[Streak.dateKey(date)] = trimmed.isEmpty ? nil : trimmed
         save()
     }
 
@@ -322,13 +550,13 @@ class StreakStore: ObservableObject {
 
     /// Push the current badge count and daily reminders to the system.
     func refreshNotifications() {
-        let unfilled = unfilledTodayCount
+        let counts = NotificationManager.unfilledCounts(for: streaks)
         let total = streaks.count
         let times = reminderTimes
         Task {
             await NotificationManager.refresh(
                 times: times,
-                unfilledToday: unfilled,
+                unfilledCounts: counts,
                 totalStreaks: total
             )
         }
@@ -371,9 +599,10 @@ class StreakStore: ObservableObject {
 
     // MARK: - Missed days
 
-    /// True if `date` is a past day (since the card was created) left on
-    /// Neutral — either never filled out (it defaults to Neutral when the day
-    /// resets) or explicitly marked Neutral.
+    /// True if `date` is a past day (since the card was created) the user
+    /// failed to complete, respecting the streak's type and schedule:
+    /// off-days of a weekday schedule are never missed, and count-per-period
+    /// goals have no per-day misses at all (missing is a week/month concept).
     func isMissedDay(_ date: Date, for streak: Streak) -> Bool {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: date)
@@ -381,29 +610,64 @@ class StreakStore: ObservableObject {
         guard day < today, day >= calendar.startOfDay(for: streak.startDate) else {
             return false
         }
-        let status = streak.dayStatuses[Streak.dateKey(day)]
-        return status == nil || status == .neutral
+        switch streak.type {
+        case .daily:
+            let status = streak.dayStatuses[Streak.dateKey(day)]
+            return status == nil || status == .neutral
+        case .multipleDaily:
+            return streak.count(on: day) < streak.dailyTarget
+        case .weekly, .monthly:
+            switch streak.goalMode {
+            case .specificWeekdays:
+                guard streak.isActive(on: day) else { return false }
+                let status = streak.dayStatuses[Streak.dateKey(day)]
+                return status == nil || status == .neutral
+            case .countPerPeriod:
+                return false
+            }
+        }
     }
 
-    /// Whether the streak has any past days still on Neutral.
+    /// Whether the streak has any past days that count as missed.
     func hasMissedDays(for streak: Streak) -> Bool {
+        // Count-per-period goals never produce per-day misses; skip the scan.
+        if streak.isPeriodBased && streak.goalMode == .countPerPeriod { return false }
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         var day = calendar.startOfDay(for: streak.startDate)
         while day < today {
-            let status = streak.dayStatuses[Streak.dateKey(day)]
-            if status == nil || status == .neutral { return true }
+            if isMissedDay(day, for: streak) { return true }
             guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
             day = next
         }
         return false
     }
 
+    /// Number of past days that count as missed (for statistics).
+    func missedDayCount(for streak: Streak) -> Int {
+        if streak.isPeriodBased && streak.goalMode == .countPerPeriod { return 0 }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var day = calendar.startOfDay(for: streak.startDate)
+        var count = 0
+        while day < today {
+            if isMissedDay(day, for: streak) { count += 1 }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return count
+    }
+
     func currentStreak(for streak: Streak) -> Int {
-        streak.currentStreakValue()
+        streak.displayStreakValue()
     }
 
     func longestStreak(for streak: Streak) -> Int {
+
+        // Weekly/monthly streaks count consecutive complete periods.
+        if streak.isPeriodBased {
+            return streak.longestPeriodStreak()
+        }
 
         let calendar = Calendar.current
 
@@ -538,6 +802,24 @@ class StreakStore: ObservableObject {
                 }
             }
             streaks[i].dayStatuses = shifted
+
+            var shiftedCounts: [String: Int] = [:]
+            for (key, value) in streaks[i].dayCounts {
+                if let date = formatter.date(from: key),
+                   let newDate = Calendar.current.date(byAdding: .day, value: -1, to: date) {
+                    shiftedCounts[Streak.dateKey(newDate)] = value
+                }
+            }
+            streaks[i].dayCounts = shiftedCounts
+
+            var shiftedNotes: [String: String] = [:]
+            for (key, value) in streaks[i].dayNotes {
+                if let date = formatter.date(from: key),
+                   let newDate = Calendar.current.date(byAdding: .day, value: -1, to: date) {
+                    shiftedNotes[Streak.dateKey(newDate)] = value
+                }
+            }
+            streaks[i].dayNotes = shiftedNotes
         }
 
         save()
