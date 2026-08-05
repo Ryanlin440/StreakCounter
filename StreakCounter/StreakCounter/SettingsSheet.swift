@@ -105,6 +105,39 @@ struct SettingsSheet: View {
                     }
                 }
 
+                Section {
+                    NavigationLink {
+                        StatisticsView(store: store)
+                    } label: {
+                        Label("Statistics", systemImage: "chart.bar.fill")
+                    }
+                } footer: {
+                    Text("Detailed statistics for every streak, grouped by type.")
+                }
+
+                Section {
+                    Picker("Card shape", selection: Binding(
+                        get: { store.cardLayout },
+                        set: { store.setCardLayout($0) }
+                    )) {
+                        ForEach(CardLayout.allCases) { layout in
+                            Text(layout.displayName).tag(layout)
+                        }
+                    }
+                    Picker("Sort cards", selection: Binding(
+                        get: { store.sortMode },
+                        set: { store.setSortMode($0) }
+                    )) {
+                        ForEach(StreakSortMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                } header: {
+                    Text("Layout")
+                } footer: {
+                    Text("Triangle shows one full-width card per row. Square shows two smaller cards per row when there's space. By Type groups cards into Multiple Times a Day, Daily, Weekly, and Monthly; Custom Order keeps your drag-to-reorder arrangement.")
+                }
+
                 Section("Card Size") {
                     Slider(
                         value: Binding(
