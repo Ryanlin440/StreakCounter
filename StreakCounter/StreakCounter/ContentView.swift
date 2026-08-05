@@ -18,13 +18,17 @@ struct ContentView: View {
     @EnvironmentObject private var auth: AuthService
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var newGoal = ""
     @State private var showSettings = false
+    @State private var showCreateStreak = false
+    @State private var showDatePicker = false
     @State private var flameGlow = false
     @State private var pendingDelete: Streak?
     /// The streak whose calendar is being shown, pushed programmatically so
     /// only the calendar button (not the whole card row) opens it.
     @State private var calendarStreakID: UUID?
+    /// The day that was "today" the last time the scene was active, so a
+    /// day rollover can snap the selected date forward with it.
+    @State private var lastKnownToday = Calendar.current.startOfDay(for: Date())
 
     var body: some View {
         Group {
@@ -49,6 +53,15 @@ struct ContentView: View {
         )
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
+                // After a day rollover, a selected date that was "today"
+                // follows along to the new today.
+                let today = Calendar.current.startOfDay(for: Date())
+                if today != lastKnownToday {
+                    if Calendar.current.isDate(store.selectedDate, inSameDayAs: lastKnownToday) {
+                        store.selectDate(today)
+                    }
+                    lastKnownToday = today
+                }
                 store.refreshNotifications()
             } else if newPhase == .background {
                 BackgroundRefresh.schedule()
@@ -200,7 +213,9 @@ struct ContentView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if !store.streaks.isEmpty {
+                // Edit mode only applies to the full-width List (reorder &
+                // delete circles); the grid uses context menus instead.
+                if !store.streaks.isEmpty && store.cardLayout == .fullWidth {
                     ToolbarItem(placement: .topBarLeading) {
                         EditButton()
                             .foregroundStyle(Color(red: 0.12, green: 0.13, blue: 0.16))
@@ -215,57 +230,171 @@ struct ContentView: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                addGoalCard
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: ContentView.phoneContentMaxWidth)
-                    .frame(maxWidth: .infinity)
+            .safeAreaInset(edge: .top) {
+                HStack(spacing: 8) {
+                    selectedDateBar
+                    Spacer()
+                    // Directly underneath the Settings gear in the nav bar.
+                    addButton
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+                .frame(maxWidth: ContentView.phoneContentMaxWidth)
+                .frame(maxWidth: .infinity)
             }
             .sheet(isPresented: $showSettings) {
                 SettingsSheet(store: store)
                     .environmentObject(auth)
             }
+            .sheet(isPresented: $showCreateStreak) {
+                CreateStreakView(store: store)
+            }
+            .sheet(isPresented: $showDatePicker) {
+                datePickerSheet
+            }
         }
+    }
+
+    // MARK: - Date selection
+
+    private var selectedDateLabel: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(store.selectedDate) { return "Today" }
+        if calendar.isDateInYesterday(store.selectedDate) { return "Yesterday" }
+        return store.selectedDate.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    /// Chevrons + tappable date label for switching which day the cards
+    /// show and edit. Tinted orange while viewing a past day.
+    private var selectedDateBar: some View {
+        HStack(spacing: 2) {
+            Button {
+                if let previous = Calendar.current.date(
+                    byAdding: .day, value: -1, to: store.selectedDate
+                ) {
+                    store.selectDate(previous)
+                }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                showDatePicker = true
+            } label: {
+                Text(selectedDateLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                if let next = Calendar.current.date(
+                    byAdding: .day, value: 1, to: store.selectedDate
+                ) {
+                    store.selectDate(next)
+                }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isViewingToday)
+            .opacity(store.isViewingToday ? 0.3 : 1)
+
+            if !store.isViewingToday {
+                Button {
+                    store.selectDate(Date())
+                } label: {
+                    Text("Today")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.orange)
+                        .foregroundColor(.white)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 4)
+            }
+        }
+        .foregroundColor(Color(red: 0.12, green: 0.13, blue: 0.16))
+        .padding(.horizontal, 8)
+        .frame(height: 40)
+        .background(
+            Capsule().fill(
+                store.isViewingToday
+                    ? Color.white.opacity(0.85)
+                    : Color.orange.opacity(0.22)
+            )
+        )
+        .overlay(
+            Capsule().stroke(
+                store.isViewingToday
+                    ? Color.gray.opacity(0.25)
+                    : Color.orange.opacity(0.6),
+                lineWidth: 1
+            )
+        )
+    }
+
+    private var addButton: some View {
+        Button {
+            showCreateStreak = true
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(.white)
+                .frame(width: 40, height: 40)
+                .background(Color.accentColor)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Create a new streak")
+    }
+
+    private var datePickerSheet: some View {
+        NavigationStack {
+            DatePicker(
+                "Selected day",
+                selection: Binding(
+                    get: { store.selectedDate },
+                    set: { store.selectDate($0) }
+                ),
+                in: ...Date(),
+                displayedComponents: .date
+            )
+            .datePickerStyle(.graphical)
+            .padding()
+            .navigationTitle("Go to Day")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showDatePicker = false }
+                        .bold()
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     // MARK: - Content
 
     @ViewBuilder
     private var content: some View {
-        List {
-            if store.streaks.isEmpty {
-                emptyState
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 24, leading: 16, bottom: 16, trailing: 16))
+        Group {
+            if store.cardLayout == .grid && !store.streaks.isEmpty {
+                gridContent
             } else {
-                ForEach(store.streaks) { streak in
-                    StreakListRow(
-                        streak: streak,
-                        store: store,
-                        pendingDelete: $pendingDelete,
-                        calendarStreakID: $calendarStreakID
-                    )
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            pendingDelete = streak
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                }
-                .onMove { from, to in
-                    store.moveStreak(from: from, to: to)
-                }
+                listContent
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .scrollDismissesKeyboard(.interactively)
         .navigationDestination(item: $calendarStreakID) { streakID in
             StreakCalendarView(streakID: streakID, store: store)
         }
@@ -287,39 +416,102 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Sections
+    // MARK: - Card layouts
 
-    private var addGoalCard: some View {
-        HStack(spacing: 12) {
-
-            TextField(
-                "",
-                text: $newGoal,
-                prompt: Text("New goal (e.g. Read 10 pages)")
-                    .foregroundColor(Color.gray.opacity(0.6))
-            )
-            .font(.system(size: 17))
-            .foregroundStyle(.gray)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            .background(Color.gray.opacity(0.1))
-            .clipShape(Capsule())
-            .onSubmit(addGoal)
-
-            Button(action: addGoal) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 44))
-                    .foregroundStyle(newGoal.isEmpty ? Color.gray.opacity(0.5) : Color.accentColor)
+    /// Full-width cards (the "Triangle" layout), one per row, grouped into
+    /// sections according to the user's sort mode.
+    private var listContent: some View {
+        List {
+            if store.streaks.isEmpty {
+                emptyState
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 24, leading: 16, bottom: 16, trailing: 16))
+            } else {
+                ForEach(store.sectionedStreaks) { section in
+                    Section {
+                        ForEach(section.streaks) { streak in
+                            StreakListRow(
+                                streak: streak,
+                                store: store,
+                                pendingDelete: $pendingDelete,
+                                calendarStreakID: $calendarStreakID
+                            )
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    pendingDelete = streak
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                        // Manual reordering only makes sense in the single
+                        // unsectioned Custom Order mode.
+                        .onMove(perform: store.sortMode == .manual ? { from, to in
+                            store.moveStreak(from: from, to: to)
+                        } : nil)
+                    } header: {
+                        if let title = section.title {
+                            sectionHeader(title)
+                        }
+                    }
+                }
             }
-            .disabled(newGoal.isEmpty)
         }
-        .padding(16)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 22))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(Color.gray.opacity(0.25), lineWidth: 1)
-        )
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    /// Square cards (the "Square" layout), two per row when width allows.
+    /// Delete is offered via each card's context menu since the grid has no
+    /// List edit mode.
+    private var gridContent: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                ForEach(store.sectionedStreaks) { section in
+                    if let title = section.title {
+                        sectionHeader(title)
+                            .padding(.top, 4)
+                    }
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 170), spacing: 12)],
+                        alignment: .center,
+                        spacing: 12
+                    ) {
+                        ForEach(section.streaks) { streak in
+                            StreakCardView(
+                                streak: streak,
+                                store: store,
+                                onOpenCalendar: { calendarStreakID = streak.id },
+                                compact: true
+                            )
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    pendingDelete = streak
+                                } label: {
+                                    Label("Delete streak", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.footnote.weight(.bold))
+            .textCase(.uppercase)
+            .foregroundColor(Color(red: 0.25, green: 0.27, blue: 0.31))
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var emptyState: some View {
@@ -332,7 +524,7 @@ struct ContentView: View {
                 Text("Light your first streak")
                     .font(.title3.weight(.bold))
                     .foregroundColor(.primary)
-                Text("Add a goal below and start a daily fire.")
+                Text("Tap + above to create your first streak.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -369,13 +561,6 @@ struct ContentView: View {
             }
         }
         .ignoresSafeArea()
-    }
-
-    private func addGoal() {
-        let trimmed = newGoal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        store.addStreak(name: trimmed)
-        newGoal = ""
     }
 }
 
