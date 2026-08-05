@@ -14,20 +14,45 @@ struct StreakCardView: View {
     /// a NavigationLink, which would make the whole List row tappable and
     /// draw a disclosure chevron.
     var onOpenCalendar: () -> Void = {}
+    /// Tighter layout for the two-column grid ("Square") card layout.
+    var compact: Bool = false
     @EnvironmentObject private var auth: AuthService
 
     @State private var showCardSettings = false
+    @State private var showDayNote = false
 
     private var textColor: Color {
         streak.textColor.color
     }
 
     private var scale: CGFloat {
-        CGFloat(store.cardSize)
+        CGFloat(store.cardSize) * (compact ? 0.85 : 1.0)
     }
 
-    private var todayStatusForDisplay: DayStatus {
-        store.status(for: Date(), on: streak) ?? .neutral
+    /// The day the card is showing/editing — the app-wide selected date.
+    private var displayDate: Date {
+        store.selectedDate
+    }
+
+    private var statusForDisplay: DayStatus {
+        store.status(for: displayDate, on: streak) ?? .neutral
+    }
+
+    /// Off-day of a specific-weekday schedule: the card stays visible but
+    /// greyed out so the user understands why it can't be interacted with.
+    private var isInactiveDay: Bool {
+        !streak.isActive(on: displayDate)
+    }
+
+    private var hasDayNote: Bool {
+        streak.note(on: displayDate)?.isEmpty == false
+    }
+
+    /// Week/month progress toward the goal for the period containing the
+    /// selected date. nil for day-based streak types.
+    private var periodProgress: (done: Int, required: Int)? {
+        guard let interval = streak.periodInterval(containing: displayDate) else { return nil }
+        return (streak.doneCount(in: interval), streak.requiredCount(in: interval))
     }
 
     private var hasUnlockedUnseenMessage: Bool {
@@ -43,7 +68,11 @@ struct StreakCardView: View {
                     Text(streak.name)
                         .font(.system(size: 17 * scale, weight: .semibold))
                         .foregroundColor(textColor)
-                    if !streak.notes.isEmpty {
+                        .lineLimit(compact ? 1 : nil)
+                    Text(streak.goalDescription)
+                        .font(.system(size: 11 * scale, weight: .medium))
+                        .foregroundColor(textColor.opacity(0.6))
+                    if !streak.notes.isEmpty && !compact {
                         Text(streak.notes)
                             .font(.system(size: 12 * scale))
                             .italic()
@@ -73,27 +102,54 @@ struct StreakCardView: View {
             HStack(spacing: 16 * scale) {
                 statCounter(
                     value: store.currentStreak(for: streak),
-                    title: "Current",
+                    title: streak.isPeriodBased ? "Current \(streak.streakUnit)" : "Current",
                     systemImage: "flame.fill"
                 )
                 statCounter(
                     value: store.longestStreak(for: streak),
-                    title: "Best",
+                    title: streak.isPeriodBased ? "Best \(streak.streakUnit)" : "Best",
                     systemImage: "trophy.fill"
                 )
                 Spacer()
-                Text("Started \(streak.startDate.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.system(size: 11 * scale))
-                    .foregroundColor(textColor.opacity(0.7))
+                if !compact {
+                    Text("Started \(streak.startDate.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.system(size: 11 * scale))
+                        .foregroundColor(textColor.opacity(0.7))
+                }
+            }
+
+            if let progress = periodProgress, !isInactiveDay {
+                HStack(spacing: 4 * scale) {
+                    if progress.done >= progress.required && progress.required > 0 {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 12 * scale))
+                            .foregroundColor(Color(.systemGreen))
+                    }
+                    Text("\(progress.done) / \(progress.required) \(streak.periodCaption)")
+                        .font(.system(size: 12 * scale, weight: .semibold))
+                        .foregroundColor(
+                            progress.done >= progress.required && progress.required > 0
+                                ? Color(.systemGreen)
+                                : textColor.opacity(0.75)
+                        )
+                }
             }
 
             HStack(spacing: 8 * scale) {
-                StatusSegmentedControl(
-                    current: todayStatusForDisplay,
-                    scale: scale
-                ) { status in
-                    store.setStatus(status, for: Date(), on: streak)
+                controlArea
+
+                Button {
+                    showDayNote = true
+                } label: {
+                    Image(systemName: hasDayNote ? "note.text" : "square.and.pencil")
+                        .font(.system(size: 16 * scale))
+                        .foregroundColor(hasDayNote ? .orange : textColor)
+                        .padding(8 * scale)
+                        .background(textColor.opacity(0.1))
+                        .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(hasDayNote ? "Edit this day's note" : "Add a note for this day")
 
                 Button(action: onOpenCalendar) {
                     Image(systemName: "calendar")
@@ -125,9 +181,51 @@ struct StreakCardView: View {
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.06), radius: 3, x: 0, y: 1)
+        .opacity(isInactiveDay ? 0.5 : 1)
+        .saturation(isInactiveDay ? 0.3 : 1)
         .sheet(isPresented: $showCardSettings) {
             StreakCardSettingsSheet(streakID: streak.id, store: store)
                 .environmentObject(auth)
+        }
+        .sheet(isPresented: $showDayNote) {
+            DayNotesSheet(streakID: streak.id, date: displayDate, store: store)
+        }
+    }
+
+    /// The completion control for the selected date, by streak type.
+    @ViewBuilder
+    private var controlArea: some View {
+        if isInactiveDay {
+            HStack(spacing: 6 * scale) {
+                Image(systemName: "moon.zzz.fill")
+                    .font(.system(size: 13 * scale))
+                Text("Rest day — scheduled \(streak.scheduledWeekdaysDescription)")
+                    .font(.system(size: 12 * scale, weight: .medium))
+                    .lineLimit(2)
+            }
+            .foregroundColor(textColor.opacity(0.7))
+            .frame(maxWidth: .infinity, minHeight: 36 * scale)
+            .background(Color(.systemGray3).opacity(0.2))
+            .clipShape(Capsule())
+        } else {
+            switch streak.type {
+            case .multipleDaily:
+                CountControl(
+                    count: streak.count(on: displayDate),
+                    target: streak.dailyTarget,
+                    scale: scale,
+                    textColor: textColor,
+                    onIncrement: { store.incrementCount(for: displayDate, on: streak) },
+                    onDecrement: { store.decrementCount(for: displayDate, on: streak) }
+                )
+            case .daily, .weekly, .monthly:
+                StatusSegmentedControl(
+                    current: statusForDisplay,
+                    scale: scale
+                ) { status in
+                    store.setStatus(status, for: displayDate, on: streak)
+                }
+            }
         }
     }
 

@@ -63,27 +63,14 @@ struct StreakCardSettingsSheet: View {
                     } header: {
                         Text("Notes")
                     } footer: {
-                        Text("Notes appear under the streak name on the card.")
+                        Text("Notes appear under the streak name on the card. Notes for individual days are added from the card or the calendar.")
                     }
 
-                    Section {
-                        statRow(
-                            label: "Current not-done streak",
-                            value: "\(store.currentNotDoneStreak(for: streak)) days"
-                        )
-                        statRow(
-                            label: "Longest not-done streak",
-                            value: "\(store.longestNotDoneStreak(for: streak)) days"
-                        )
-                        statRow(
-                            label: "Days done",
-                            value: "\(store.doneDayCount(for: streak)) done / \(store.daysSinceCreation(for: streak)) days"
-                        )
-                    } header: {
-                        Text("Statistics")
-                    } footer: {
-                        Text("Not-done streaks treat Neutral and skipped days as not done. Days done compares the days you marked Done against every day since this card was created.")
+                    if streak.type != .daily {
+                        goalSection(streak: streak)
                     }
+
+                    statisticsSection(streak: streak)
 
                     Section {
                         if streak.milestoneMessages.isEmpty {
@@ -292,6 +279,144 @@ struct StreakCardSettingsSheet: View {
         guard let s = streak else { return }
         if notesDraft != s.notes {
             store.setNotes(notesDraft, for: s)
+        }
+    }
+
+    // MARK: - Goal editing
+
+    /// Live bindings that read from the store (not a captured Streak copy),
+    /// so consecutive edits inside the sheet never act on stale data.
+    private var liveStreak: Streak? {
+        store.streaks.first(where: { $0.id == streakID })
+    }
+
+    @ViewBuilder
+    private func goalSection(streak: Streak) -> some View {
+        Section {
+            switch streak.type {
+            case .multipleDaily:
+                Stepper(
+                    "Times per day: \(streak.dailyTarget)",
+                    value: Binding(
+                        get: { liveStreak?.dailyTarget ?? 1 },
+                        set: { store.setDailyTarget($0, for: streak) }
+                    ),
+                    in: 1...50
+                )
+            case .weekly, .monthly:
+                Picker("Goal type", selection: Binding(
+                    get: { liveStreak?.goalMode ?? .countPerPeriod },
+                    set: { newMode in
+                        guard let s = liveStreak else { return }
+                        store.setGoal(
+                            mode: newMode,
+                            weekdays: s.scheduledWeekdays,
+                            periodTarget: s.periodTarget,
+                            for: s
+                        )
+                    }
+                )) {
+                    Text("Specific weekdays").tag(GoalMode.specificWeekdays)
+                    Text(streak.type == .weekly ? "Days per week" : "Days per month")
+                        .tag(GoalMode.countPerPeriod)
+                }
+
+                if streak.goalMode == .specificWeekdays {
+                    WeekdayPicker(selection: Binding(
+                        get: { liveStreak?.scheduledWeekdays ?? [] },
+                        set: { newDays in
+                            guard let s = liveStreak else { return }
+                            store.setGoal(
+                                mode: .specificWeekdays,
+                                weekdays: newDays,
+                                periodTarget: s.periodTarget,
+                                for: s
+                            )
+                        }
+                    ))
+                } else {
+                    Stepper(
+                        "\(streak.type == .weekly ? "Days per week" : "Days per month"): \(streak.periodTarget)",
+                        value: Binding(
+                            get: { liveStreak?.periodTarget ?? 1 },
+                            set: { newTarget in
+                                guard let s = liveStreak else { return }
+                                store.setGoal(
+                                    mode: .countPerPeriod,
+                                    weekdays: s.scheduledWeekdays,
+                                    periodTarget: newTarget,
+                                    for: s
+                                )
+                            }
+                        ),
+                        in: 1...(streak.type == .weekly ? 7 : 31)
+                    )
+                }
+            case .daily:
+                EmptyView()
+            }
+        } header: {
+            Text("Goal — \(streak.type.displayName)")
+        } footer: {
+            Text("Changing the goal re-evaluates past days against the new goal. The streak type itself can't be changed after creation.")
+        }
+    }
+
+    // MARK: - Statistics
+
+    @ViewBuilder
+    private func statisticsSection(streak: Streak) -> some View {
+        Section {
+            switch streak.type {
+            case .daily:
+                statRow(
+                    label: "Current not-done streak",
+                    value: "\(store.currentNotDoneStreak(for: streak)) days"
+                )
+                statRow(
+                    label: "Longest not-done streak",
+                    value: "\(store.longestNotDoneStreak(for: streak)) days"
+                )
+                statRow(
+                    label: "Days done",
+                    value: "\(store.doneDayCount(for: streak)) done / \(store.daysSinceCreation(for: streak)) days"
+                )
+            case .multipleDaily:
+                statRow(
+                    label: "Total completions",
+                    value: "\(streak.totalCompletionCount)"
+                )
+                statRow(
+                    label: "Days target met",
+                    value: "\(streak.targetMetDayCount) / \(store.daysSinceCreation(for: streak)) days"
+                )
+                statRow(
+                    label: "Current streak",
+                    value: "\(store.currentStreak(for: streak)) days"
+                )
+            case .weekly, .monthly:
+                let unit = streak.type == .weekly ? "weeks" : "months"
+                statRow(
+                    label: "\(unit.capitalized) completed",
+                    value: "\(streak.completedPeriodCount()) / \(streak.elapsedPeriodCount()) \(unit)"
+                )
+                statRow(
+                    label: "Current streak",
+                    value: "\(store.currentStreak(for: streak)) \(unit)"
+                )
+                statRow(
+                    label: "Best streak",
+                    value: "\(store.longestStreak(for: streak)) \(unit)"
+                )
+            }
+        } header: {
+            Text("Statistics")
+        } footer: {
+            if streak.type == .daily {
+                Text("Not-done streaks treat Neutral and skipped days as not done. Days done compares the days you marked Done against every day since this card was created.")
+            } else {
+                Text("See Settings → Statistics for the full breakdown of every streak.")
+            }
         }
     }
 
