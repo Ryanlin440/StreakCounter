@@ -85,7 +85,8 @@ struct WidgetStreakInfo: Identifiable {
         case .weekly, .monthly:
             if let interval = streak.periodInterval(containing: date) {
                 done = streak.doneCount(in: interval)
-                target = streak.requiredCount(in: interval)
+                // Full schedule, matching the app's card and calendar totals.
+                target = streak.scheduleCount(in: interval)
             } else {
                 done = 0
                 target = 1

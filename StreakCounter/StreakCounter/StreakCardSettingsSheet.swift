@@ -211,7 +211,8 @@ struct StreakCardSettingsSheet: View {
             }) { msg in
                 MilestoneMessageDetailSheet(
                     message: msg,
-                    streakName: streak?.name ?? ""
+                    streakName: streak?.name ?? "",
+                    milestoneUnit: streak?.milestoneUnit ?? "day"
                 )
                 .environmentObject(auth)
             }
@@ -433,15 +434,16 @@ struct StreakCardSettingsSheet: View {
 
     @ViewBuilder
     private func milestoneRow(message: MilestoneMessage) -> some View {
+        let unit = streak?.milestoneUnit ?? "day"
         HStack {
             Image(systemName: message.isUnlocked ? "envelope.open.fill" : "lock.fill")
                 .foregroundColor(message.isUnlocked ? .orange : .gray)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Day \(message.targetDays)")
+                Text("\(unit.capitalized) \(message.targetDays)")
                     .font(.body.weight(.medium))
                 Text(message.isUnlocked
                     ? "Unlocked — tap to read"
-                    : "Locked until you reach \(message.targetDays) days")
+                    : "Locked until you reach \(message.targetDays) \(unit)\(message.targetDays == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

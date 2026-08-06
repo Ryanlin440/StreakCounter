@@ -116,7 +116,7 @@ struct SettingsSheet: View {
                 }
 
                 Section {
-                    Picker("Card shape", selection: Binding(
+                    Picker("Card layout", selection: Binding(
                         get: { store.cardLayout },
                         set: { store.setCardLayout($0) }
                     )) {
@@ -124,18 +124,14 @@ struct SettingsSheet: View {
                             Text(layout.displayName).tag(layout)
                         }
                     }
-                    Picker("Sort cards", selection: Binding(
-                        get: { store.sortMode },
-                        set: { store.setSortMode($0) }
-                    )) {
-                        ForEach(StreakSortMode.allCases) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    }
+                    Toggle("Card labels", isOn: Binding(
+                        get: { store.showCardLabels },
+                        set: { store.setShowCardLabels($0) }
+                    ))
                 } header: {
                     Text("Layout")
                 } footer: {
-                    Text("Triangle shows one full-width card per row. Square shows two smaller cards per row when there's space. By Type groups cards into Multiple Times a Day, Daily, Weekly, and Monthly; Custom Order keeps your drag-to-reorder arrangement.")
+                    Text("Full Width shows one card per row; Grid fits two smaller cards side by side. Card labels group cards under Multiple Times a Day, Daily, Weekly, and Monthly headings. Tap Edit on the main page to drag cards into your own order.")
                 }
 
                 Section("Card Size") {

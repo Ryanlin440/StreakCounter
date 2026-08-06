@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AuthenticationServices
+import UniformTypeIdentifiers
 
 struct ContentView: View {
 
@@ -29,6 +30,11 @@ struct ContentView: View {
     /// The day that was "today" the last time the scene was active, so a
     /// day rollover can snap the selected date forward with it.
     @State private var lastKnownToday = Calendar.current.startOfDay(for: Date())
+    /// Edit mode for the grid layout (the List drives its own via EditButton).
+    /// While active, cards can be dragged into a custom order.
+    @State private var isGridEditing = false
+    /// The card currently being dragged in the grid, if any.
+    @State private var draggingStreakID: UUID?
 
     var body: some View {
         Group {
@@ -213,13 +219,22 @@ struct ContentView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // Edit mode only applies to the full-width List (reorder &
-                // delete circles); the grid uses context menus instead.
-                if !store.streaks.isEmpty && store.cardLayout == .fullWidth {
+                // Edit mode: the List gets reorder & delete circles via the
+                // system EditButton; the grid toggles its own drag-to-reorder
+                // mode since it isn't a List.
+                if !store.streaks.isEmpty {
                     ToolbarItem(placement: .topBarLeading) {
-                        EditButton()
-                            .foregroundStyle(Color(red: 0.12, green: 0.13, blue: 0.16))
-                            .font(.body.weight(.semibold))
+                        Group {
+                            if store.cardLayout == .fullWidth {
+                                EditButton()
+                            } else {
+                                Button(isGridEditing ? "Done" : "Edit") {
+                                    withAnimation { isGridEditing.toggle() }
+                                }
+                            }
+                        }
+                        .foregroundStyle(Color(red: 0.12, green: 0.13, blue: 0.16))
+                        .font(.body.weight(.semibold))
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -231,11 +246,14 @@ struct ContentView: View {
                 }
             }
             .safeAreaInset(edge: .top) {
-                HStack(spacing: 8) {
+                ZStack {
+                    // Centered on the screen; the add button sits at the
+                    // trailing edge, directly under the Settings gear.
                     selectedDateBar
-                    Spacer()
-                    // Directly underneath the Settings gear in the nav bar.
-                    addButton
+                    HStack {
+                        Spacer()
+                        addButton
+                    }
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 4)
@@ -418,8 +436,8 @@ struct ContentView: View {
 
     // MARK: - Card layouts
 
-    /// Full-width cards (the "Triangle" layout), one per row, grouped into
-    /// sections according to the user's sort mode.
+    /// Full-width cards, one per row, grouped under type headers when card
+    /// labels are on.
     private var listContent: some View {
         List {
             if store.streaks.isEmpty {
@@ -448,11 +466,9 @@ struct ContentView: View {
                                 }
                             }
                         }
-                        // Manual reordering only makes sense in the single
-                        // unsectioned Custom Order mode.
-                        .onMove(perform: store.sortMode == .manual ? { from, to in
-                            store.moveStreak(from: from, to: to)
-                        } : nil)
+                        .onMove { from, to in
+                            store.moveStreak(type: section.type, from: from, to: to)
+                        }
                     } header: {
                         if let title = section.title {
                             sectionHeader(title)
@@ -466,9 +482,9 @@ struct ContentView: View {
         .scrollDismissesKeyboard(.interactively)
     }
 
-    /// Square cards (the "Square" layout), two per row when width allows.
-    /// Delete is offered via each card's context menu since the grid has no
-    /// List edit mode.
+    /// Grid layout: two smaller cards per row when width allows. Delete is
+    /// offered via each card's context menu; while editing, cards are
+    /// dragged into a custom order instead.
     private var gridContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
@@ -483,19 +499,7 @@ struct ContentView: View {
                         spacing: 12
                     ) {
                         ForEach(section.streaks) { streak in
-                            StreakCardView(
-                                streak: streak,
-                                store: store,
-                                onOpenCalendar: { calendarStreakID = streak.id },
-                                compact: true
-                            )
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    pendingDelete = streak
-                                } label: {
-                                    Label("Delete streak", systemImage: "trash")
-                                }
-                            }
+                            gridCard(for: streak)
                         }
                     }
                 }
@@ -504,6 +508,47 @@ struct ContentView: View {
             .padding(.vertical, 8)
         }
         .scrollDismissesKeyboard(.interactively)
+        .onChange(of: store.cardLayout) { _, _ in
+            isGridEditing = false
+        }
+    }
+
+    @ViewBuilder
+    private func gridCard(for streak: Streak) -> some View {
+        let card = StreakCardView(
+            streak: streak,
+            store: store,
+            onOpenCalendar: { calendarStreakID = streak.id },
+            compact: true
+        )
+        if isGridEditing {
+            card
+                // Blocks the card's own buttons while editing so a long
+                // press anywhere on the card starts the drag.
+                .overlay(
+                    Color.clear
+                        .contentShape(RoundedRectangle(cornerRadius: 14))
+                )
+                .opacity(draggingStreakID == streak.id ? 0.5 : 1)
+                .onDrag {
+                    draggingStreakID = streak.id
+                    return NSItemProvider(object: streak.id.uuidString as NSString)
+                }
+                .onDrop(of: [.text], delegate: GridReorderDropDelegate(
+                    targetID: streak.id,
+                    draggingID: $draggingStreakID,
+                    store: store
+                ))
+        } else {
+            card
+                .contextMenu {
+                    Button(role: .destructive) {
+                        pendingDelete = streak
+                    } label: {
+                        Label("Delete streak", systemImage: "trash")
+                    }
+                }
+        }
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -561,6 +606,38 @@ struct ContentView: View {
             }
         }
         .ignoresSafeArea()
+    }
+}
+
+/// Reorders grid cards while a drag is in flight: hovering the dragged card
+/// over another card swaps it into that position live, and the new order is
+/// persisted once the card is dropped. SwiftUI calls DropDelegate methods on
+/// the main thread, so hopping onto the main actor for the store is safe.
+private struct GridReorderDropDelegate: DropDelegate {
+
+    let targetID: UUID
+    @Binding var draggingID: UUID?
+    let store: StreakStore
+
+    func dropEntered(info: DropInfo) {
+        guard let draggingID, draggingID != targetID else { return }
+        MainActor.assumeIsolated {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                store.liveMoveStreak(id: draggingID, over: targetID)
+            }
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        MainActor.assumeIsolated {
+            store.persistStreakOrder()
+        }
+        draggingID = nil
+        return true
     }
 }
 

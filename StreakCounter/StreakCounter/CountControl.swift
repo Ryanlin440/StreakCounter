@@ -46,6 +46,10 @@ struct CountControl: View {
                             .transition(.scale.combined(with: .opacity))
                     }
                 }
+                // Shrink rather than clip when the control gets narrow, so
+                // the numbers are never cut off by the capsule.
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
                 Capsule()
                     .fill(textColor.opacity(0.15))
                     .frame(height: 4 * scale)

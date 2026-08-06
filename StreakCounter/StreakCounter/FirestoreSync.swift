@@ -21,7 +21,7 @@ struct StreakStoreSnapshot: Codable {
     /// NOTE: app versions without streak types re-encode snapshots without
     /// the new Streak fields — last-write-wins means an old client can drop
     /// them. Acceptable for same-version fleets.
-    var sortMode: String?
+    var showCardLabels: Bool?
     var cardLayout: String?
 }
 

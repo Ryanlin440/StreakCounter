@@ -14,7 +14,7 @@ struct StreakCardView: View {
     /// a NavigationLink, which would make the whole List row tappable and
     /// draw a disclosure chevron.
     var onOpenCalendar: () -> Void = {}
-    /// Tighter layout for the two-column grid ("Square") card layout.
+    /// Tighter layout for the two-column Grid card layout.
     var compact: Bool = false
     @EnvironmentObject private var auth: AuthService
 
@@ -49,10 +49,11 @@ struct StreakCardView: View {
     }
 
     /// Week/month progress toward the goal for the period containing the
-    /// selected date. nil for day-based streak types.
+    /// selected date. nil for day-based streak types. Shows the period's
+    /// full schedule so the total matches the calendar's month summary.
     private var periodProgress: (done: Int, required: Int)? {
         guard let interval = streak.periodInterval(containing: displayDate) else { return nil }
-        return (streak.doneCount(in: interval), streak.requiredCount(in: interval))
+        return (streak.doneCount(in: interval), streak.scheduleCount(in: interval))
     }
 
     private var hasUnlockedUnseenMessage: Bool {
@@ -135,40 +136,22 @@ struct StreakCardView: View {
                 }
             }
 
-            HStack(spacing: 8 * scale) {
-                controlArea
-
-                Button {
-                    showDayNote = true
-                } label: {
-                    Image(systemName: hasDayNote ? "note.text" : "square.and.pencil")
-                        .font(.system(size: 16 * scale))
-                        .foregroundColor(hasDayNote ? .orange : textColor)
-                        .padding(8 * scale)
-                        .background(textColor.opacity(0.1))
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(hasDayNote ? "Edit this day's note" : "Add a note for this day")
-
-                Button(action: onOpenCalendar) {
-                    Image(systemName: "calendar")
-                        .font(.system(size: 18 * scale))
-                        .foregroundColor(textColor)
-                        .padding(8 * scale)
-                        .background(textColor.opacity(0.1))
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .overlay(alignment: .topTrailing) {
-                    if store.hasMissedDays(for: streak) {
-                        Image(systemName: "exclamationmark.circle.fill")
-                            .font(.system(size: 13 * scale))
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, .red)
-                            .offset(x: 3 * scale, y: -3 * scale)
-                            .accessibilityLabel("Some past days were never filled out")
+            // Grid cards are too narrow for the control and both buttons on
+            // one line, so the control gets its own full-width row there.
+            if compact {
+                VStack(alignment: .leading, spacing: 8 * scale) {
+                    controlArea
+                    HStack(spacing: 8 * scale) {
+                        noteButton
+                        calendarButton
+                        Spacer()
                     }
+                }
+            } else {
+                HStack(spacing: 8 * scale) {
+                    controlArea
+                    noteButton
+                    calendarButton
                 }
             }
         }
@@ -189,6 +172,43 @@ struct StreakCardView: View {
         }
         .sheet(isPresented: $showDayNote) {
             DayNotesSheet(streakID: streak.id, date: displayDate, store: store)
+        }
+    }
+
+    private var noteButton: some View {
+        Button {
+            showDayNote = true
+        } label: {
+            Image(systemName: hasDayNote ? "note.text" : "square.and.pencil")
+                .font(.system(size: 16 * scale))
+                .foregroundColor(hasDayNote ? .orange : textColor)
+                .padding(8 * scale)
+                .background(textColor.opacity(0.1))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(hasDayNote ? "Edit this day's note" : "Add a note for this day")
+    }
+
+    private var calendarButton: some View {
+        Button(action: onOpenCalendar) {
+            Image(systemName: "calendar")
+                .font(.system(size: 18 * scale))
+                .foregroundColor(textColor)
+                .padding(8 * scale)
+                .background(textColor.opacity(0.1))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) {
+            if store.hasMissedDays(for: streak) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 13 * scale))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .red)
+                    .offset(x: 3 * scale, y: -3 * scale)
+                    .accessibilityLabel("Some past days were never filled out")
+            }
         }
     }
 

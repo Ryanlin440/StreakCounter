@@ -12,17 +12,42 @@ struct AddMilestoneMessageSheet: View {
     @ObservedObject var store: StreakStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var targetDays: Int = 100
+    /// The milestone target in the streak's own unit: days for day-based
+    /// streaks, consecutive complete weeks/months for period-based ones
+    /// (matching how `targetDays` is compared when unlocking).
+    @State private var targetDays: Int
     @State private var message: String = ""
 
-    private let presets = [7, 14, 30, 50, 100, 200, 365, 500, 1000]
+    private let presets: [Int]
+    private let unit: String
+
+    init(streak: Streak, store: StreakStore) {
+        self.streak = streak
+        self.store = store
+        self.unit = streak.milestoneUnit
+        switch streak.type {
+        case .daily, .multipleDaily:
+            presets = [7, 14, 30, 50, 100, 200, 365, 500, 1000]
+            _targetDays = State(initialValue: 100)
+        case .weekly:
+            presets = [2, 4, 8, 12, 26, 52, 104]
+            _targetDays = State(initialValue: 12)
+        case .monthly:
+            presets = [1, 2, 3, 6, 12, 18, 24, 36]
+            _targetDays = State(initialValue: 6)
+        }
+    }
+
+    private var targetLabel: String {
+        "\(targetDays) \(unit)\(targetDays == 1 ? "" : "s")"
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Milestone") {
                     Stepper(value: $targetDays, in: 1...10000) {
-                        Text("\(targetDays) day\(targetDays == 1 ? "" : "s")")
+                        Text(targetLabel)
                             .font(.body.weight(.medium))
                     }
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -49,7 +74,7 @@ struct AddMilestoneMessageSheet: View {
                 } header: {
                     Text("Message")
                 } footer: {
-                    Text("The message stays locked until you reach \(targetDays) days. Once unlocked, you can email it to yourself.")
+                    Text("The message stays locked until you reach \(targetLabel). Once unlocked, you can email it to yourself.")
                 }
             }
             .navigationTitle("New Message")
@@ -79,6 +104,8 @@ struct MilestoneMessageDetailSheet: View {
 
     let message: MilestoneMessage
     let streakName: String
+    /// "day", "week", or "month" — the unit the target is measured in.
+    var milestoneUnit: String = "day"
     @EnvironmentObject private var auth: AuthService
 
     @Environment(\.dismiss) private var dismiss
@@ -101,7 +128,7 @@ struct MilestoneMessageDetailSheet: View {
                             .font(.title2)
                             .foregroundColor(message.isUnlocked ? .orange : .gray)
                         VStack(alignment: .leading) {
-                            Text("Day \(message.targetDays)")
+                            Text("\(milestoneUnit.capitalized) \(message.targetDays)")
                                 .font(.title2.weight(.bold))
                             Text(headerSubtitle)
                                 .font(.caption)
@@ -144,7 +171,7 @@ struct MilestoneMessageDetailSheet: View {
                                 .padding(.top, 8)
                         }
                     } else {
-                        Text("Keep going — this message unlocks when you reach \(message.targetDays) days.")
+                        Text("Keep going — this message unlocks when you reach \(targetLabel).")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -201,6 +228,10 @@ struct MilestoneMessageDetailSheet: View {
         }
     }
 
+    private var targetLabel: String {
+        "\(message.targetDays) \(milestoneUnit)\(message.targetDays == 1 ? "" : "s")"
+    }
+
     private var headerSubtitle: String {
         if let unlocked = message.unlockedAt {
             return "Unlocked \(unlocked.formatted(date: .abbreviated, time: .omitted))"
@@ -211,14 +242,14 @@ struct MilestoneMessageDetailSheet: View {
 
     private var emailSubject: String {
         let label = streakName.isEmpty ? "your streak" : streakName
-        return "🎉 Day \(message.targetDays) of \(label) — a note from your past self"
+        return "🎉 \(milestoneUnit.capitalized) \(message.targetDays) of \(label) — a note from your past self"
     }
 
     private var emailBody: String {
         let written = message.createdAt.formatted(date: .long, time: .omitted)
         let label = streakName.isEmpty ? "your streak" : streakName
         return """
-        You did it — \(message.targetDays) days of \(label)!
+        You did it — \(targetLabel) of \(label)!
 
         Here's the note you left for your future self on \(written):
 

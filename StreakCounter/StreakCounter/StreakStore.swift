@@ -11,25 +11,8 @@ import SwiftUI
 import UIKit
 import FirebaseAuth
 
-/// How the main page organizes streak cards.
-enum StreakSortMode: String, Codable, CaseIterable, Identifiable {
-    case groupedByType
-    case manual
-    case alphabetical
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .groupedByType: return "By Type"
-        case .manual: return "Custom Order"
-        case .alphabetical: return "Alphabetical"
-        }
-    }
-}
-
-/// Card shape on the main page: full-width rows (the original "triangle"
-/// design) or a two-column grid of square cards.
+/// Card shape on the main page: full-width rows, or a two-column grid of
+/// smaller cards.
 enum CardLayout: String, Codable, CaseIterable, Identifiable {
     case fullWidth
     case grid
@@ -38,14 +21,14 @@ enum CardLayout: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .fullWidth: return "Triangle"
-        case .grid: return "Square"
+        case .fullWidth: return "Full Width"
+        case .grid: return "Grid"
         }
     }
 }
 
 /// A group of cards on the main page. `type` is nil for the single
-/// unsectioned group used by the manual/alphabetical sort modes.
+/// unsectioned group used when card labels are turned off.
 struct StreakSection: Identifiable {
     let type: StreakType?
     let streaks: [Streak]
@@ -70,7 +53,9 @@ class StreakStore: ObservableObject {
     /// The day the main page is showing/editing. Defaults to today and is
     /// never persisted — reopening the app always starts on today.
     @Published var selectedDate: Date = Calendar.current.startOfDay(for: Date())
-    @Published var sortMode: StreakSortMode = .groupedByType
+    /// Whether cards are grouped under type headers ("card labels"). The
+    /// user's drag-to-reorder arrangement is kept either way.
+    @Published var showCardLabels = true
     @Published var cardLayout: CardLayout = .fullWidth
 
     static let defaultCardSize: Double = 1.0
@@ -81,7 +66,7 @@ class StreakStore: ObservableObject {
 
     private let backgroundColorKey = "backgroundColor"
     private let cardSizeKey = "cardSize"
-    private let sortModeKey = "sortMode"
+    private let showCardLabelsKey = "showCardLabels"
     private let cardLayoutKey = "cardLayout"
     /// Also read by BackgroundRefresh, which reschedules reminders without a store.
     static let reminderTimesKey = "reminderTimes"
@@ -144,7 +129,7 @@ class StreakStore: ObservableObject {
         backgroundColor = .appBackground
         backgroundImageData = nil
         reminderTimes = NotificationManager.defaultReminderTimes
-        sortMode = .groupedByType
+        showCardLabels = true
         cardLayout = .fullWidth
         selectedDate = Calendar.current.startOfDay(for: Date())
 
@@ -152,7 +137,7 @@ class StreakStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: backgroundColorKey)
         UserDefaults.standard.removeObject(forKey: cardSizeKey)
         UserDefaults.standard.removeObject(forKey: Self.reminderTimesKey)
-        UserDefaults.standard.removeObject(forKey: sortModeKey)
+        UserDefaults.standard.removeObject(forKey: showCardLabelsKey)
         UserDefaults.standard.removeObject(forKey: cardLayoutKey)
         try? FileManager.default.removeItem(at: backgroundImageURL)
 
@@ -178,7 +163,7 @@ class StreakStore: ObservableObject {
             cardSize: cardSize,
             backgroundColor: backgroundColor,
             reminderTimes: reminderTimes,
-            sortMode: sortMode.rawValue,
+            showCardLabels: showCardLabels,
             cardLayout: cardLayout.rawValue
         )
     }
@@ -195,9 +180,9 @@ class StreakStore: ObservableObject {
         }
         // Snapshots from app versions without display preferences leave the
         // local settings untouched.
-        if let raw = snapshot.sortMode, let mode = StreakSortMode(rawValue: raw) {
-            self.sortMode = mode
-            UserDefaults.standard.set(raw, forKey: sortModeKey)
+        if let labels = snapshot.showCardLabels {
+            self.showCardLabels = labels
+            UserDefaults.standard.set(labels, forKey: showCardLabelsKey)
         }
         if let raw = snapshot.cardLayout, let layout = CardLayout(rawValue: raw) {
             self.cardLayout = layout
@@ -233,23 +218,17 @@ class StreakStore: ObservableObject {
 
     // MARK: - Sections & sorting
 
-    /// The card groups shown on the main page and in Statistics.
+    /// The card groups shown on the main page. Cards keep the user's custom
+    /// order; labels only group them under type headers.
     var sectionedStreaks: [StreakSection] {
         guard !streaks.isEmpty else { return [] }
-        switch sortMode {
-        case .groupedByType:
+        if showCardLabels {
             return StreakType.displayOrder.compactMap { type in
                 let group = streaks.filter { $0.type == type }
                 return group.isEmpty ? nil : StreakSection(type: type, streaks: group)
             }
-        case .manual:
-            return [StreakSection(type: nil, streaks: streaks)]
-        case .alphabetical:
-            let sorted = streaks.sorted {
-                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-            }
-            return [StreakSection(type: nil, streaks: sorted)]
         }
+        return [StreakSection(type: nil, streaks: streaks)]
     }
 
     /// Sections always grouped by type, regardless of the user's sort mode.
@@ -261,9 +240,9 @@ class StreakStore: ObservableObject {
         }
     }
 
-    func setSortMode(_ mode: StreakSortMode) {
-        sortMode = mode
-        UserDefaults.standard.set(mode.rawValue, forKey: sortModeKey)
+    func setShowCardLabels(_ show: Bool) {
+        showCardLabels = show
+        UserDefaults.standard.set(show, forKey: showCardLabelsKey)
         pushToCloud()
     }
 
@@ -274,9 +253,8 @@ class StreakStore: ObservableObject {
     }
 
     private func loadDisplayPreferences() {
-        if let raw = UserDefaults.standard.string(forKey: sortModeKey),
-           let mode = StreakSortMode(rawValue: raw) {
-            sortMode = mode
+        if let labels = UserDefaults.standard.object(forKey: showCardLabelsKey) as? Bool {
+            showCardLabels = labels
         }
         if let raw = UserDefaults.standard.string(forKey: cardLayoutKey),
            let layout = CardLayout(rawValue: raw) {
@@ -298,8 +276,37 @@ class StreakStore: ObservableObject {
         save()
     }
 
-    func moveStreak(from offsets: IndexSet, to destination: Int) {
-        streaks.move(fromOffsets: offsets, toOffset: destination)
+    /// Reorder rows within one section of the list. When card labels are on,
+    /// the section's local indices are mapped back to positions in the master
+    /// `streaks` array so the other types keep their relative order.
+    func moveStreak(type: StreakType?, from offsets: IndexSet, to destination: Int) {
+        guard let type else {
+            streaks.move(fromOffsets: offsets, toOffset: destination)
+            save()
+            return
+        }
+        var group = streaks.filter { $0.type == type }
+        group.move(fromOffsets: offsets, toOffset: destination)
+        var reordered = group.makeIterator()
+        for i in streaks.indices where streaks[i].type == type {
+            if let next = reordered.next() { streaks[i] = next }
+        }
+        save()
+    }
+
+    /// Live reorder while a grid card is being dragged over another card.
+    /// Not persisted — call `persistStreakOrder()` when the drag ends.
+    /// With card labels on, dragging is confined to the card's own section.
+    func liveMoveStreak(id: UUID, over targetID: UUID) {
+        guard let from = streaks.firstIndex(where: { $0.id == id }),
+              let to = streaks.firstIndex(where: { $0.id == targetID }),
+              from != to else { return }
+        if showCardLabels && streaks[from].type != streaks[to].type { return }
+        streaks.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+    }
+
+    /// Persist the order once a grid drag ends.
+    func persistStreakOrder() {
         save()
     }
 

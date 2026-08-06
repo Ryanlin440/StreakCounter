@@ -103,8 +103,13 @@ struct StreakCalendarView: View {
         guard let streak else { return nil }
         if streak.type == .monthly,
            let interval = calendar.dateInterval(of: .month, for: displayedMonth) {
-            let required = streak.requiredCount(in: interval)
-            guard required > 0 else { return streak.goalDescription }
+            // The full month's schedule, unlike requiredCount, which clamps
+            // to the streak's start date and would understate the total for
+            // the month the streak was created in.
+            let required = streak.scheduleCount(in: interval)
+            guard required > 0, interval.end > streak.startDate else {
+                return streak.goalDescription
+            }
             return "\(streak.doneCount(in: interval)) / \(required) this month"
         }
         return streak.goalDescription
@@ -199,9 +204,10 @@ struct StreakCalendarView: View {
         return formatter.string(from: displayedMonth)
     }
 
+    /// Weekday column titles, Monday first.
     private var weekdaySymbols: [String] {
-        let formatter = DateFormatter()
-        return formatter.shortWeekdaySymbols ?? []
+        let symbols = calendar.shortWeekdaySymbols // always Sunday-first
+        return Array(symbols[1...]) + [symbols[0]]
     }
 
     private var days: [Date?] {
@@ -221,7 +227,9 @@ struct StreakCalendarView: View {
             for: displayedMonth
         )?.count ?? 0
 
-        var cells: [Date?] = Array(repeating: nil, count: firstWeekday - 1)
+        // Leading blanks in a Monday-first grid: weekday is 1 = Sunday …
+        // 7 = Saturday, so Monday (2) maps to column 0.
+        var cells: [Date?] = Array(repeating: nil, count: (firstWeekday + 5) % 7)
 
         for day in 0..<daysInMonth {
             if let date = calendar.date(

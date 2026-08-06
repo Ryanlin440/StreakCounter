@@ -308,6 +308,29 @@ extension Streak {
         }
     }
 
+    /// The period's full schedule, ignoring the start-date clamp that
+    /// `requiredCount` applies: every scheduled weekday in the interval, or
+    /// the plain period target. Used by the calendar so a month's total
+    /// always matches the scheduled dates visible in it.
+    func scheduleCount(in interval: DateInterval, calendar: Calendar = .current) -> Int {
+        guard isPeriodBased else { return 0 }
+        switch goalMode {
+        case .specificWeekdays:
+            var count = 0
+            var day = calendar.startOfDay(for: interval.start)
+            while day < interval.end {
+                if scheduledWeekdays.contains(calendar.component(.weekday, from: day)) {
+                    count += 1
+                }
+                guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+            return count
+        case .countPerPeriod:
+            return periodTarget
+        }
+    }
+
     /// Whether the week/month containing `date` has met its goal.
     func isPeriodComplete(containing date: Date, calendar: Calendar = .current) -> Bool {
         guard let interval = periodInterval(containing: date, calendar: calendar) else { return false }
@@ -415,6 +438,17 @@ extension Streak {
             return currentStreakValue(asOf: now)
         case .weekly, .monthly:
             return currentPeriodStreak(asOf: now)
+        }
+    }
+
+    /// Unit for milestone-message targets. Weekly/monthly streaks unlock
+    /// milestones by consecutive complete periods (the value the flame
+    /// shows), day-based ones by consecutive days.
+    var milestoneUnit: String {
+        switch type {
+        case .daily, .multipleDaily: return "day"
+        case .weekly: return "week"
+        case .monthly: return "month"
         }
     }
 
