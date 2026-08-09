@@ -145,6 +145,7 @@ struct StreakCalendarView: View {
                         isToday: calendar.isDateInToday(date),
                         isMissed: store.isMissedDay(date, for: streak),
                         isInactive: !streak.isActive(on: date),
+                        isAutoFilled: streak.autoFilledDates.contains(Streak.dateKey(date)),
                         isMultiCount: streak.type == .multipleDaily,
                         count: streak.count(on: date),
                         target: streak.dailyTarget,
@@ -158,8 +159,11 @@ struct StreakCalendarView: View {
                         onDecrement: {
                             store.decrementCount(for: date, on: streak)
                         },
-                        onClearCount: {
-                            store.setCount(0, for: date, on: streak)
+                        onMarkNotDone: {
+                            store.markMultiNotDone(for: date, on: streak)
+                        },
+                        onMarkDone: {
+                            store.setCount(streak.dailyTarget, for: date, on: streak)
                         },
                         onEditNote: {
                             noteDay = NoteDay(date: date)
@@ -175,7 +179,7 @@ struct StreakCalendarView: View {
 
     private var legend: some View {
 
-        HStack(spacing: 16) {
+        LegendFlow(spacing: 16, rowSpacing: 8) {
             ForEach(DayStatus.allCases, id: \.self) { s in
                 HStack(spacing: 4) {
                     Circle()
@@ -185,7 +189,7 @@ struct StreakCalendarView: View {
                         .font(.caption)
                 }
             }
-            if let streak, streak.isPeriodBased, streak.goalMode == .specificWeekdays {
+            if let streak, streak.goalMode == .specificWeekdays, !streak.scheduledWeekdays.isEmpty {
                 HStack(spacing: 4) {
                     Circle()
                         .fill(Color.gray.opacity(0.15))
@@ -194,8 +198,18 @@ struct StreakCalendarView: View {
                         .font(.caption)
                 }
             }
+            if let streak, streak.missBehavior != .default {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    Text("Auto-filled")
+                        .font(.caption)
+                }
+            }
         }
         .padding(.top, 8)
+        .padding(.horizontal)
     }
 
     private var monthYearString: String {
@@ -258,6 +272,8 @@ struct DayCell: View {
     var isMissed: Bool = false
     /// Off-day of a specific-weekday schedule: greyed out and not markable.
     var isInactive: Bool = false
+    /// The status was written by auto-fill (a forgotten day), not by hand.
+    var isAutoFilled: Bool = false
     /// Multiple Times a Day streaks show a count and use +1/−1 instead of
     /// the status menu.
     var isMultiCount: Bool = false
@@ -267,7 +283,10 @@ struct DayCell: View {
     var onTap: (DayStatus) -> Void
     var onIncrement: () -> Void = {}
     var onDecrement: () -> Void = {}
-    var onClearCount: () -> Void = {}
+    /// Marks the day not done, keeping whatever partial count was logged.
+    var onMarkNotDone: () -> Void = {}
+    /// Sets a Multiple Times a Day count straight to the target (n/n).
+    var onMarkDone: () -> Void = {}
     var onEditNote: () -> Void = {}
 
     private let calendar = Calendar.current
@@ -278,15 +297,19 @@ struct DayCell: View {
             if isInactive {
                 // Off days can't be marked, but a note is still allowed.
             } else if isMultiCount {
+                Button(action: onMarkDone) {
+                    Label("Done (\(target)/\(target))", systemImage: "checkmark.circle")
+                }
+                .disabled(count >= target)
+                Button(action: onMarkNotDone) {
+                    Label("Not done", systemImage: "xmark.circle")
+                }
+                Divider()
                 Button(action: onIncrement) {
                     Label("+1", systemImage: "plus")
                 }
                 Button(action: onDecrement) {
                     Label("−1", systemImage: "minus")
-                }
-                .disabled(count <= 0)
-                Button(action: onClearCount) {
-                    Label("Clear", systemImage: "arrow.counterclockwise")
                 }
                 .disabled(count <= 0)
             } else {
@@ -329,6 +352,15 @@ struct DayCell: View {
                     }
                 }
 
+                if isAutoFilled {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(textColor.opacity(0.9))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .padding(2)
+                        .accessibilityLabel("Filled in automatically")
+                }
+
                 if isMissed {
                     Image(systemName: "exclamationmark.circle.fill")
                         .font(.system(size: 11))
@@ -368,5 +400,63 @@ struct DayCell: View {
             return Color.secondary
         }
         return status == nil ? Color.primary : Color.white
+    }
+}
+
+/// A simple left-aligned flow layout: lays items out in a row and wraps to
+/// the next row when the current one runs out of width. Used for the calendar
+/// legend so extra chips (Off day, Auto-filled) drop to a second line instead
+/// of overflowing.
+private struct LegendFlow: Layout {
+
+    var spacing: CGFloat = 16
+    var rowSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
+                totalWidth = max(totalWidth, rowWidth)
+                totalHeight += rowHeight + rowSpacing
+                rowWidth = size.width
+                rowHeight = size.height
+            } else {
+                rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+                rowHeight = max(rowHeight, size.height)
+            }
+        }
+        totalWidth = max(totalWidth, rowWidth)
+        totalHeight += rowHeight
+        return CGSize(width: totalWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + spacing + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + rowSpacing
+                rowHeight = 0
+            } else if x > bounds.minX {
+                x += spacing
+            }
+            subview.place(
+                at: CGPoint(x: x, y: y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(size)
+            )
+            x += size.width
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }

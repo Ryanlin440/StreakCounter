@@ -29,7 +29,9 @@ enum DayStatus: String, Codable, CaseIterable {
     var symbol: String {
         switch self {
         case .notDone: return "xmark"
-        case .neutral: return "minus"
+        // Neutral reads as "unmarked" — the day hasn't been meaningfully
+        // filled out yet.
+        case .neutral: return "circle.dashed"
         case .done: return "checkmark"
         }
     }

@@ -76,6 +76,12 @@ class StreakStore: ObservableObject {
 
     init() {
         load()
+        // Monthly "specific weekdays" is no longer a supported combination —
+        // those cards are now Daily specific-weekday cards. Convert any that
+        // linger in the local cache so they land in the Daily section.
+        if Self.migrateTypeChanges(&streaks) {
+            persistStreaksLocally()
+        }
         loadCardImages()
         loadBackgroundImage()
         loadBackgroundColor()
@@ -83,6 +89,8 @@ class StreakStore: ObservableObject {
         loadReminderTimes()
         loadDisplayPreferences()
         setupSync()
+        // Fill in any days that elapsed unmarked, per each streak's setting.
+        applyAutoFillForAll()
         // Seed the widget on launch so it has data before the first change.
         SharedStreakData.write(streaks: streaks)
     }
@@ -172,6 +180,9 @@ class StreakStore: ObservableObject {
     /// cache so the offline UI sees the merged state too.
     func applyRemoteSnapshot(_ snapshot: StreakStoreSnapshot) {
         self.streaks = snapshot.streaks
+        // Convert any legacy monthly + specific-weekday cards arriving from
+        // another device / older app version.
+        _ = Self.migrateTypeChanges(&self.streaks)
         self.cardSize = snapshot.cardSize
         self.backgroundColor = snapshot.backgroundColor
         if let times = snapshot.reminderTimes {
@@ -356,6 +367,7 @@ class StreakStore: ObservableObject {
         streaks[index].dayStatuses = [:]
         streaks[index].dayCounts = [:]
         streaks[index].dayNotes = [:]
+        streaks[index].autoFilledDates = []
         streaks[index].startDate = Date()
         for i in streaks[index].milestoneMessages.indices {
             streaks[index].milestoneMessages[i].unlockedAt = nil
@@ -370,6 +382,7 @@ class StreakStore: ObservableObject {
             streaks[i].dayStatuses = [:]
             streaks[i].dayCounts = [:]
             streaks[i].dayNotes = [:]
+            streaks[i].autoFilledDates = []
             streaks[i].startDate = Date()
             for j in streaks[i].milestoneMessages.indices {
                 streaks[i].milestoneMessages[j].unlockedAt = nil
@@ -406,6 +419,8 @@ class StreakStore: ObservableObject {
 
         let key = Streak.dateKey(date)
         streaks[index].dayStatuses[key] = status
+        // A hand-set day is no longer auto-managed.
+        streaks[index].autoFilledDates.removeAll { $0 == key }
 
         if status == .done {
             if !streaks[index].completedDates.contains(where: {
@@ -433,8 +448,25 @@ class StreakStore: ObservableObject {
         let clamped = max(0, count)
         let key = Streak.dateKey(date)
         streaks[index].dayCounts[key] = clamped == 0 ? nil : clamped
+        // A hand-set count is no longer auto-managed.
+        streaks[index].autoFilledDates.removeAll { $0 == key }
         rederiveMultiStatus(at: index, for: date)
         unlockMilestonesIfNeeded(at: index)
+        save()
+    }
+
+    /// Mark a Multiple Times a Day day as explicitly "not done" while keeping
+    /// whatever partial count the user logged. This closes the day out — it
+    /// no longer counts as a missed/unfilled day — without erasing progress.
+    func markMultiNotDone(for date: Date, on streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }),
+              streaks[index].type == .multipleDaily else { return }
+        let key = Streak.dateKey(date)
+        streaks[index].dayStatuses[key] = .notDone
+        streaks[index].autoFilledDates.removeAll { $0 == key }
+        streaks[index].completedDates.removeAll {
+            Calendar.current.isDate($0, inSameDayAs: date)
+        }
         save()
     }
 
@@ -476,8 +508,95 @@ class StreakStore: ObservableObject {
             guard let date = Streak.date(fromKey: key) else { continue }
             rederiveMultiStatus(at: index, for: date)
         }
+        resolveAutoFill(at: index)
         unlockMilestonesIfNeeded(at: index)
         save()
+    }
+
+    // MARK: - Forgotten-day behavior
+
+    /// Set what happens to elapsed days the user never marked, and apply it
+    /// immediately to this streak's history.
+    func setMissBehavior(_ behavior: MissBehavior, for streak: Streak) {
+        guard let index = streaks.firstIndex(where: { $0.id == streak.id }) else { return }
+        streaks[index].missBehavior = behavior
+        resolveAutoFill(at: index)
+        save()
+    }
+
+    /// Re-apply auto-fill for every streak. Idempotent — safe to call on
+    /// launch and whenever the day rolls over. Saves (and syncs) only if a
+    /// streak's filled set actually changed, to avoid needless cloud writes.
+    func applyAutoFillForAll(asOf now: Date = Date()) {
+        var changed = false
+        for i in streaks.indices {
+            if resolveAutoFill(at: i, asOf: now) { changed = true }
+        }
+        if changed { save() }
+    }
+
+    /// Undo the streak's previous auto-fill, then, unless the behavior is
+    /// `.default`, mark every elapsed, still-untouched, scheduled day as done
+    /// or not done per the setting. Only fully-blank days are ever filled, so
+    /// manual progress is never overwritten and the fill fully reverts.
+    /// Returns whether the filled set changed. Does not save.
+    @discardableResult
+    private func resolveAutoFill(at index: Int, asOf now: Date = Date()) -> Bool {
+        let calendar = Calendar.current
+        let previous = streaks[index].autoFilledDates
+
+        // 1. Revert the prior fill so re-runs and behavior changes are clean.
+        for key in previous {
+            streaks[index].dayStatuses[key] = nil
+            streaks[index].dayCounts[key] = nil
+            if let date = Streak.date(fromKey: key) {
+                streaks[index].completedDates.removeAll {
+                    calendar.isDate($0, inSameDayAs: date)
+                }
+            }
+        }
+        streaks[index].autoFilledDates = []
+
+        // 2. Re-fill for the current behavior. Applies to every streak type:
+        // day-based cards fill each blank active day, and count-per-period
+        // cards fill every blank day (which can over-count, by design).
+        let behavior = streaks[index].missBehavior
+        if behavior != .default {
+            let today = calendar.startOfDay(for: now)
+            var day = calendar.startOfDay(for: streaks[index].startDate)
+            var filled: [String] = []
+            while day < today {
+                let key = Streak.dateKey(day)
+                // A day left on Neutral counts as unmarked, so it's eligible to
+                // be auto-filled just like a never-touched blank day.
+                let status = streaks[index].dayStatuses[key]
+                let isBlank = (status == nil || status == .neutral)
+                    && streaks[index].dayCounts[key] == nil
+                if isBlank, streaks[index].isActive(on: day) {
+                    switch behavior {
+                    case .autoMiss:
+                        streaks[index].dayStatuses[key] = .notDone
+                    case .autoDone:
+                        streaks[index].dayStatuses[key] = .done
+                        streaks[index].completedDates.append(day)
+                        if streaks[index].type == .multipleDaily {
+                            streaks[index].dayCounts[key] = streaks[index].dailyTarget
+                        }
+                    case .default:
+                        break
+                    }
+                    filled.append(key)
+                }
+                guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+            streaks[index].autoFilledDates = filled
+        }
+
+        if behavior == .autoDone {
+            unlockMilestonesIfNeeded(at: index)
+        }
+        return streaks[index].autoFilledDates != previous
     }
 
     // MARK: - Weekly/monthly goals
@@ -489,6 +608,10 @@ class StreakStore: ObservableObject {
         streaks[index].goalMode = mode
         streaks[index].scheduledWeekdays = weekdays.filter { (1...7).contains($0) }.sorted()
         streaks[index].periodTarget = max(1, periodTarget)
+        // Schedule changes alter which days are "active", so re-evaluate the
+        // auto-fill (e.g. a day that's no longer scheduled shouldn't stay
+        // auto-filled).
+        resolveAutoFill(at: index)
         unlockMilestonesIfNeeded(at: index)
         save()
     }
@@ -619,9 +742,15 @@ class StreakStore: ObservableObject {
         }
         switch streak.type {
         case .daily:
+            // Off-days of a specific-weekday daily schedule are never missed.
+            guard streak.isActive(on: day) else { return false }
             let status = streak.dayStatuses[Streak.dateKey(day)]
             return status == nil || status == .neutral
         case .multipleDaily:
+            // Off-days of a specific-day schedule are never missed.
+            guard streak.isActive(on: day) else { return false }
+            // An explicit "not done" closes the day out even below target.
+            if streak.dayStatuses[Streak.dateKey(day)] == .notDone { return false }
             return streak.count(on: day) < streak.dailyTarget
         case .weekly, .monthly:
             switch streak.goalMode {
@@ -676,6 +805,14 @@ class StreakStore: ObservableObject {
             return streak.longestPeriodStreak()
         }
 
+        // Specific-day schedules count consecutive scheduled days done,
+        // skipping off-days (calendar-adjacency doesn't apply).
+        if streak.type == .daily || streak.type == .multipleDaily,
+           streak.goalMode == .specificWeekdays,
+           !streak.scheduledWeekdays.isEmpty {
+            return longestScheduledDailyStreak(for: streak)
+        }
+
         let calendar = Calendar.current
 
         let uniqueDays = Set(streak.completedDates.map { calendar.startOfDay(for: $0) })
@@ -706,11 +843,39 @@ class StreakStore: ObservableObject {
         return longest
     }
 
+    /// Longest run of consecutive scheduled days marked Done for a
+    /// specific-weekday daily streak, over its whole history.
+    private func longestScheduledDailyStreak(for streak: Streak) -> Int {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let done = Set(streak.completedDates.map { calendar.startOfDay(for: $0) })
+        var day = calendar.startOfDay(for: streak.startDate)
+        var longest = 0
+        var current = 0
+        while day <= today {
+            if streak.isActive(on: day) {
+                if done.contains(day) {
+                    current += 1
+                    longest = max(longest, current)
+                } else if day < today {
+                    // A past scheduled day that wasn't done breaks the run;
+                    // a still-blank today is pending and left alone.
+                    current = 0
+                }
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return max(longest, streak.currentStreakValue())
+    }
+
     // MARK: - Not-done statistics
 
     /// A day counts as "not done" if the user pressed Not Done or Neutral, or
     /// if the day passed without being filled out (which defaults to Neutral).
     private func countsAsNotDone(_ date: Date, for streak: Streak) -> Bool {
+        // Off-days of a specific-weekday daily schedule don't count either way.
+        guard streak.isActive(on: date) else { return false }
         let status = streak.dayStatuses[Streak.dateKey(date)]
         if status == .notDone || status == .neutral { return true }
         guard status == nil else { return false }
@@ -725,24 +890,27 @@ class StreakStore: ObservableObject {
         let today = calendar.startOfDay(for: Date())
         let todayStatus = streak.dayStatuses[Streak.dateKey(today)]
 
-        // Marking today as done breaks the not-done run.
-        if todayStatus == .done { return 0 }
+        // Marking today (a scheduled day) as done breaks the not-done run.
+        if streak.isActive(on: today), todayStatus == .done { return 0 }
 
-        var anchor: Date
-        if todayStatus == .notDone || todayStatus == .neutral {
-            anchor = today
-        } else if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
-                  countsAsNotDone(yesterday, for: streak) {
-            anchor = yesterday
-        } else {
-            return 0
+        // Only a scheduled today explicitly marked not-done starts the run;
+        // a blank or Neutral today is still pending (unmarked), so the run
+        // starts from earlier days.
+        var count = 0
+        if streak.isActive(on: today), todayStatus == .notDone {
+            count = 1
         }
 
-        var count = 1
-        while let prev = calendar.date(byAdding: .day, value: -1, to: anchor),
-              countsAsNotDone(prev, for: streak) {
-            count += 1
-            anchor = prev
+        var day = today
+        while let prev = calendar.date(byAdding: .day, value: -1, to: day) {
+            day = prev
+            // Off-days are skipped entirely — they don't extend or break it.
+            if !streak.isActive(on: day) { continue }
+            if countsAsNotDone(day, for: streak) {
+                count += 1
+            } else {
+                break
+            }
         }
         return count
     }
@@ -756,11 +924,14 @@ class StreakStore: ObservableObject {
         var current = 0
 
         while day <= today {
-            if countsAsNotDone(day, for: streak) {
-                current += 1
-                longest = max(longest, current)
-            } else {
-                current = 0
+            // Off-days neither extend nor reset the run.
+            if streak.isActive(on: day) {
+                if countsAsNotDone(day, for: streak) {
+                    current += 1
+                    longest = max(longest, current)
+                } else {
+                    current = 0
+                }
             }
             guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
             day = next
@@ -783,6 +954,28 @@ class StreakStore: ObservableObject {
         let today = calendar.startOfDay(for: Date())
         let diff = calendar.dateComponents([.day], from: start, to: today).day ?? 0
         return max(1, diff + 1)
+    }
+
+    /// Scheduled (active) days since creation, counting today. Matches
+    /// `daysSinceCreation` for everyday streaks, but counts only the scheduled
+    /// days for a specific-day daily or multiple-times-a-day streak — so its
+    /// completion rate isn't diluted by off-days.
+    func activeDaysSinceCreation(for streak: Streak) -> Int {
+        guard streak.type == .daily || streak.type == .multipleDaily,
+              streak.goalMode == .specificWeekdays,
+              !streak.scheduledWeekdays.isEmpty else {
+            return daysSinceCreation(for: streak)
+        }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var day = calendar.startOfDay(for: streak.startDate)
+        var count = 0
+        while day <= today {
+            if streak.isActive(on: day) { count += 1 }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return max(1, count)
     }
 
     func debugAdvanceDay() {
@@ -957,12 +1150,33 @@ class StreakStore: ObservableObject {
     // MARK: - Persistence
 
     private func save() {
+        persistStreaksLocally()
+        pushToCloud()
+        refreshNotifications()
+    }
+
+    /// Write streaks to the local cache and the widget without touching the
+    /// cloud — safe to call during `init`, before sync is wired up.
+    private func persistStreaksLocally() {
         if let data = try? JSONEncoder().encode(streaks) {
             UserDefaults.standard.set(data, forKey: "streaks")
         }
         SharedStreakData.write(streaks: streaks)
-        pushToCloud()
-        refreshNotifications()
+    }
+
+    /// Rewrite legacy streak-type combinations that are no longer offered.
+    /// Currently: monthly + specific-weekday cards become Daily specific-
+    /// weekday cards, keeping their schedule and history. Returns whether
+    /// anything changed.
+    @discardableResult
+    private static func migrateTypeChanges(_ streaks: inout [Streak]) -> Bool {
+        var changed = false
+        for i in streaks.indices
+        where streaks[i].type == .monthly && streaks[i].goalMode == .specificWeekdays {
+            streaks[i].type = .daily
+            changed = true
+        }
+        return changed
     }
 
     private func pushToCloud() {

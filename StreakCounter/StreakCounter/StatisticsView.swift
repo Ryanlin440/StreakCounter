@@ -59,7 +59,7 @@ struct StatisticsView: View {
 
     @ViewBuilder
     private func multiDailyRows(_ streak: Streak) -> some View {
-        let days = store.daysSinceCreation(for: streak)
+        let days = store.activeDaysSinceCreation(for: streak)
         let total = streak.totalCompletionCount
         let targetMet = streak.targetMetDayCount
         statRow("Total completions", "\(total)")
@@ -72,7 +72,7 @@ struct StatisticsView: View {
 
     @ViewBuilder
     private func dailyRows(_ streak: Streak) -> some View {
-        let days = store.daysSinceCreation(for: streak)
+        let days = store.activeDaysSinceCreation(for: streak)
         let done = store.doneDayCount(for: streak)
         statRow("Completion rate", percent(done, of: days))
         statRow("Completed days", "\(done)")

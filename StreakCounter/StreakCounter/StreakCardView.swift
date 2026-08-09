@@ -26,7 +26,11 @@ struct StreakCardView: View {
     }
 
     private var scale: CGFloat {
-        CGFloat(store.cardSize) * (compact ? 0.85 : 1.0)
+        // Grid cards are half-width, so the largest full-width sizes smush the
+        // title and numbers. Cap the base size in the grid layout before
+        // applying the compact multiplier.
+        let base = compact ? min(store.cardSize, 1.35) : store.cardSize
+        return CGFloat(base) * (compact ? 0.85 : 1.0)
     }
 
     /// The day the card is showing/editing — the app-wide selected date.
@@ -407,7 +411,8 @@ private extension DayStatus {
     var segmentSymbol: String {
         switch self {
         case .notDone: return "xmark"
-        case .neutral: return "circle"
+        // "Unmarked" look — the middle option means the day is left blank.
+        case .neutral: return "circle.dashed"
         case .done: return "checkmark"
         }
     }

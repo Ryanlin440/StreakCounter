@@ -68,6 +68,8 @@ struct ContentView: View {
                     }
                     lastKnownToday = today
                 }
+                // A day may have elapsed unmarked while backgrounded.
+                store.applyAutoFillForAll()
                 store.refreshNotifications()
             } else if newPhase == .background {
                 BackgroundRefresh.schedule()

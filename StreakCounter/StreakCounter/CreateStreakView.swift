@@ -17,14 +17,16 @@ struct CreateStreakView: View {
     @State private var name = ""
     @State private var notes = ""
     @State private var dailyTarget = 2
-    @State private var goalMode: GoalMode = .specificWeekdays
+    // Defaults to "every day" for Daily and "count per period" for Weekly.
+    @State private var goalMode: GoalMode = .countPerPeriod
     @State private var scheduledWeekdays: [Int] = []
     @State private var periodTarget = 3
 
     private var canCreate: Bool {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return false }
-        if (type == .weekly || type == .monthly), goalMode == .specificWeekdays {
+        // A specific-days goal needs at least one day selected.
+        if type != .monthly, goalMode == .specificWeekdays {
             return !scheduledWeekdays.isEmpty
         }
         return true
@@ -35,11 +37,11 @@ struct CreateStreakView: View {
         case .multipleDaily:
             return "For habits done several times a day, like drinking water 8 times."
         case .daily:
-            return "One completion per day, like the classic streak."
+            return "Every day, or only on specific days (e.g. Mon, Wed, Fri)."
         case .weekly:
-            return "Either specific weekdays (e.g. Mon, Wed, Fri) or any N days per week."
+            return "Either specific days (e.g. Mon, Wed, Fri) or any N days per week."
         case .monthly:
-            return "Either specific weekdays (e.g. every Monday) or any N days per month."
+            return "Complete it any N times within the month."
         }
     }
 
@@ -93,17 +95,52 @@ struct CreateStreakView: View {
     private var goalSection: some View {
         switch type {
         case .daily:
-            EmptyView()
-        case .multipleDaily:
-            Section("Goal") {
-                Stepper("Times per day: \(dailyTarget)", value: $dailyTarget, in: 1...50)
-            }
-        case .weekly, .monthly:
             Section {
                 Picker("Goal type", selection: $goalMode) {
-                    Text("Specific weekdays").tag(GoalMode.specificWeekdays)
-                    Text(type == .weekly ? "Days per week" : "Days per month")
-                        .tag(GoalMode.countPerPeriod)
+                    Text("Every day").tag(GoalMode.countPerPeriod)
+                    Text("Specific days").tag(GoalMode.specificWeekdays)
+                }
+                .pickerStyle(.segmented)
+
+                if goalMode == .specificWeekdays {
+                    WeekdayPicker(selection: $scheduledWeekdays)
+                }
+            } header: {
+                Text("Goal")
+            } footer: {
+                if goalMode == .specificWeekdays {
+                    Text("The card is only active on the selected weekdays. Other days are greyed out and never count against you.")
+                } else {
+                    Text("One completion every day, like the classic streak.")
+                }
+            }
+        case .multipleDaily:
+            Section {
+                Picker("Goal type", selection: $goalMode) {
+                    Text("Every day").tag(GoalMode.countPerPeriod)
+                    Text("Specific days").tag(GoalMode.specificWeekdays)
+                }
+                .pickerStyle(.segmented)
+
+                if goalMode == .specificWeekdays {
+                    WeekdayPicker(selection: $scheduledWeekdays)
+                }
+
+                Stepper("Times per day: \(dailyTarget)", value: $dailyTarget, in: 1...50)
+            } header: {
+                Text("Goal")
+            } footer: {
+                if goalMode == .specificWeekdays {
+                    Text("The card is only active on the selected days. Other days are greyed out and never count against you.")
+                } else {
+                    Text("Hit the target every day to keep the streak going.")
+                }
+            }
+        case .weekly:
+            Section {
+                Picker("Goal type", selection: $goalMode) {
+                    Text("Days per week").tag(GoalMode.countPerPeriod)
+                    Text("Specific days").tag(GoalMode.specificWeekdays)
                 }
                 .pickerStyle(.segmented)
 
@@ -111,9 +148,9 @@ struct CreateStreakView: View {
                     WeekdayPicker(selection: $scheduledWeekdays)
                 } else {
                     Stepper(
-                        "\(type == .weekly ? "Days per week" : "Days per month"): \(periodTarget)",
+                        "Days per week: \(periodTarget)",
                         value: $periodTarget,
-                        in: 1...(type == .weekly ? 7 : 31)
+                        in: 1...7
                     )
                 }
             } header: {
@@ -122,10 +159,20 @@ struct CreateStreakView: View {
                 if goalMode == .specificWeekdays {
                     Text("The card is only active on the selected days. Other days are greyed out and never count against you.")
                 } else {
-                    Text(type == .weekly
-                        ? "Complete it on any days — the week counts once you hit the target."
-                        : "Complete it on any days — the month counts once you hit the target.")
+                    Text("Complete it on any days — the week counts once you hit the target.")
                 }
+            }
+        case .monthly:
+            Section {
+                Stepper(
+                    "Times per month: \(periodTarget)",
+                    value: $periodTarget,
+                    in: 1...31
+                )
+            } header: {
+                Text("Goal")
+            } footer: {
+                Text("Complete it on any days — the month counts once you hit the target.")
             }
         }
     }
@@ -134,13 +181,16 @@ struct CreateStreakView: View {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
         let clampedPeriodTarget = min(periodTarget, type == .weekly ? 7 : 31)
+        // Monthly is always count-per-period now; ignore any stray schedule.
+        let finalGoalMode: GoalMode = type == .monthly ? .countPerPeriod : goalMode
+        let weekdays = finalGoalMode == .specificWeekdays ? scheduledWeekdays : []
         let streak = Streak(
             name: trimmedName,
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
             type: type,
             dailyTarget: dailyTarget,
-            goalMode: goalMode,
-            scheduledWeekdays: scheduledWeekdays,
+            goalMode: finalGoalMode,
+            scheduledWeekdays: weekdays,
             periodTarget: clampedPeriodTarget
         )
         store.addStreak(streak)

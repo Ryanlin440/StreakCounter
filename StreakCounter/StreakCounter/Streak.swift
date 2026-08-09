@@ -37,6 +37,28 @@ enum GoalMode: String, Codable {
     case countPerPeriod
 }
 
+/// What to do with an elapsed day the user never marked.
+enum MissBehavior: String, Codable, CaseIterable, Identifiable {
+    /// Leave forgotten days blank — they read as unfilled and show the
+    /// "never filled out" warning (the app's original behavior).
+    case `default`
+    /// Automatically count forgotten days as a miss (not done).
+    case autoMiss
+    /// Automatically count forgotten days as done, so a slip doesn't break
+    /// the streak.
+    case autoDone
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .default: return "Leave blank"
+        case .autoMiss: return "Auto-mark not done"
+        case .autoDone: return "Auto-mark done"
+        }
+    }
+}
+
 struct Streak: Identifiable, Codable {
     let id: UUID
     var name: String
@@ -63,6 +85,12 @@ struct Streak: Identifiable, Codable {
     /// Per-day notes, keyed by Streak.dateKey. Separate from the
     /// streak-level `notes`.
     var dayNotes: [String: String]
+    /// What happens to elapsed days the user never marked.
+    var missBehavior: MissBehavior
+    /// Day keys the auto-fill wrote, so the fill can be fully undone if the
+    /// behavior changes. A day drops out of this set the moment the user
+    /// edits it by hand, protecting manual changes from being reverted.
+    var autoFilledDates: [String]
 
     init(
         id: UUID = UUID(),
@@ -80,7 +108,9 @@ struct Streak: Identifiable, Codable {
         scheduledWeekdays: [Int] = [],
         periodTarget: Int = 1,
         dayCounts: [String: Int] = [:],
-        dayNotes: [String: String] = [:]
+        dayNotes: [String: String] = [:],
+        missBehavior: MissBehavior = .default,
+        autoFilledDates: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -98,11 +128,14 @@ struct Streak: Identifiable, Codable {
         self.periodTarget = max(1, periodTarget)
         self.dayCounts = dayCounts
         self.dayNotes = dayNotes
+        self.missBehavior = missBehavior
+        self.autoFilledDates = autoFilledDates
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, startDate, completedDates, dayStatuses, cardColor, textColor, notes, milestoneMessages
         case type, dailyTarget, goalMode, scheduledWeekdays, periodTarget, dayCounts, dayNotes
+        case missBehavior, autoFilledDates
     }
 
     init(from decoder: Decoder) throws {
@@ -127,6 +160,8 @@ struct Streak: Identifiable, Codable {
         self.periodTarget = max(1, try c.decodeIfPresent(Int.self, forKey: .periodTarget) ?? 1)
         self.dayCounts = try c.decodeIfPresent([String: Int].self, forKey: .dayCounts) ?? [:]
         self.dayNotes = try c.decodeIfPresent([String: String].self, forKey: .dayNotes) ?? [:]
+        self.missBehavior = try c.decodeIfPresent(MissBehavior.self, forKey: .missBehavior) ?? .default
+        self.autoFilledDates = try c.decodeIfPresent([String].self, forKey: .autoFilledDates) ?? []
     }
 
     // Cached: creating a DateFormatter per call is expensive, and dateKey is
@@ -158,13 +193,18 @@ extension Streak {
         let today = calendar.startOfDay(for: now)
         let todayStatus = dayStatuses[Streak.dateKey(today)]
 
-        // Today explicitly marked as not done or neutral breaks the streak.
-        // For Multiple Times a Day, Neutral means partial progress (derived
-        // from the count), so the day is still pending rather than broken.
-        if todayStatus == .notDone {
-            return 0
+        // Specific-day schedules count consecutive *scheduled* days marked
+        // Done, skipping off-days entirely (unscheduled days never break
+        // the run). Applies to Daily and Multiple Times a Day.
+        if (type == .daily || type == .multipleDaily),
+           goalMode == .specificWeekdays, !scheduledWeekdays.isEmpty {
+            return scheduledDailyStreakValue(asOf: now, calendar: calendar)
         }
-        if todayStatus == .neutral && type != .multipleDaily {
+
+        // Only an explicit "not done" today breaks the streak. Neutral means
+        // the day is unmarked, so it stays pending — the streak keeps showing
+        // yesterday's run, exactly as if the day hadn't been touched yet.
+        if todayStatus == .notDone {
             return 0
         }
 
@@ -189,6 +229,60 @@ extension Streak {
         return count
     }
 
+    /// Consecutive scheduled days marked Done for a specific-weekday daily
+    /// streak. Walks backwards over scheduled days only: off-days are skipped
+    /// (they neither extend nor break the run), and the run ends at the first
+    /// scheduled day that wasn't done. A scheduled today that's still blank is
+    /// treated as pending, so it doesn't break a run that's otherwise intact.
+    private func scheduledDailyStreakValue(asOf now: Date, calendar: Calendar) -> Int {
+        let today = calendar.startOfDay(for: now)
+        let doneDays = Set(completedDates.map { calendar.startOfDay(for: $0) })
+
+        // The most recent scheduled day on or before `date`. `inclusive`
+        // decides whether `date` itself can be the answer.
+        func scheduledDay(onOrBefore date: Date, inclusive: Bool) -> Date? {
+            var day = inclusive ? date : calendar.date(byAdding: .day, value: -1, to: date)
+            var guardCount = 0
+            while let d = day, guardCount < 366 {
+                if isActive(on: d, calendar: calendar) { return d }
+                day = calendar.date(byAdding: .day, value: -1, to: d)
+                guardCount += 1
+            }
+            return nil
+        }
+
+        guard let mostRecent = scheduledDay(onOrBefore: today, inclusive: true) else { return 0 }
+
+        var anchor: Date
+        if calendar.isDate(mostRecent, inSameDayAs: today) {
+            // Today is a scheduled day. Only an explicit "not done" breaks
+            // the run — Neutral means unmarked, so the day is still pending.
+            let status = dayStatuses[Streak.dateKey(today)]
+            if status == .notDone { return 0 }
+            if doneDays.contains(today) {
+                anchor = today
+            } else {
+                // Scheduled today, not marked yet — pending. Continue from the
+                // previous scheduled day, which must be done.
+                guard let prev = scheduledDay(onOrBefore: today, inclusive: false),
+                      doneDays.contains(prev) else { return 0 }
+                anchor = prev
+            }
+        } else {
+            // Today is an off-day: the run must end at the last scheduled day.
+            guard doneDays.contains(mostRecent) else { return 0 }
+            anchor = mostRecent
+        }
+
+        var count = 1
+        while let prev = scheduledDay(onOrBefore: anchor, inclusive: false),
+              doneDays.contains(prev) {
+            count += 1
+            anchor = prev
+        }
+        return count
+    }
+
     /// True while the streak hasn't been meaningfully filled out today:
     /// no status yet, or still on the default Neutral.
     func isUnfilledToday(asOf now: Date = Date()) -> Bool {
@@ -202,9 +296,15 @@ extension Streak {
     func isUnfilled(on date: Date) -> Bool {
         switch type {
         case .daily:
+            // Off-days of a specific-weekday daily schedule never nag.
+            guard isActive(on: date) else { return false }
             let status = dayStatuses[Streak.dateKey(date)]
             return status == nil || status == .neutral
         case .multipleDaily:
+            // Off-days of a specific-day schedule never nag.
+            guard isActive(on: date) else { return false }
+            // An explicit "not done" closes the day out even below target.
+            if dayStatuses[Streak.dateKey(date)] == .notDone { return false }
             return count(on: date) < dailyTarget
         case .weekly, .monthly:
             switch goalMode {
@@ -238,10 +338,11 @@ extension Streak {
         dayNotes[Streak.dateKey(date)]
     }
 
-    /// Whether the streak can be interacted with on this date. Only weekly/
-    /// monthly streaks with specific scheduled weekdays have off-days.
+    /// Whether the streak can be interacted with on this date. Any streak
+    /// with a specific-day schedule (daily, multiple times a day, weekly)
+    /// has off-days; everything else is always active.
     func isActive(on date: Date, calendar: Calendar = .current) -> Bool {
-        guard isPeriodBased, goalMode == .specificWeekdays, !scheduledWeekdays.isEmpty else {
+        guard goalMode == .specificWeekdays, !scheduledWeekdays.isEmpty else {
             return true
         }
         return scheduledWeekdays.contains(calendar.component(.weekday, from: date))
@@ -478,9 +579,21 @@ extension Streak {
     var goalDescription: String {
         switch type {
         case .daily:
-            return "Daily"
+            switch goalMode {
+            case .specificWeekdays:
+                return scheduledWeekdays.isEmpty ? "Daily" : scheduledWeekdaysDescription
+            case .countPerPeriod:
+                return "Daily"
+            }
         case .multipleDaily:
-            return "\(dailyTarget)× a day"
+            switch goalMode {
+            case .specificWeekdays:
+                return scheduledWeekdays.isEmpty
+                    ? "\(dailyTarget)× a day"
+                    : "\(dailyTarget)× · \(scheduledWeekdaysDescription)"
+            case .countPerPeriod:
+                return "\(dailyTarget)× a day"
+            }
         case .weekly:
             switch goalMode {
             case .specificWeekdays:

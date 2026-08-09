@@ -66,9 +66,9 @@ struct StreakCardSettingsSheet: View {
                         Text("Notes appear under the streak name on the card. Notes for individual days are added from the card or the calendar.")
                     }
 
-                    if streak.type != .daily {
-                        goalSection(streak: streak)
-                    }
+                    goalSection(streak: streak)
+
+                    missBehaviorSection(streak: streak)
 
                     statisticsSection(streak: streak)
 
@@ -295,16 +295,7 @@ struct StreakCardSettingsSheet: View {
     private func goalSection(streak: Streak) -> some View {
         Section {
             switch streak.type {
-            case .multipleDaily:
-                Stepper(
-                    "Times per day: \(streak.dailyTarget)",
-                    value: Binding(
-                        get: { liveStreak?.dailyTarget ?? 1 },
-                        set: { store.setDailyTarget($0, for: streak) }
-                    ),
-                    in: 1...50
-                )
-            case .weekly, .monthly:
+            case .daily:
                 Picker("Goal type", selection: Binding(
                     get: { liveStreak?.goalMode ?? .countPerPeriod },
                     set: { newMode in
@@ -317,9 +308,79 @@ struct StreakCardSettingsSheet: View {
                         )
                     }
                 )) {
-                    Text("Specific weekdays").tag(GoalMode.specificWeekdays)
-                    Text(streak.type == .weekly ? "Days per week" : "Days per month")
-                        .tag(GoalMode.countPerPeriod)
+                    Text("Every day").tag(GoalMode.countPerPeriod)
+                    Text("Specific days").tag(GoalMode.specificWeekdays)
+                }
+
+                if streak.goalMode == .specificWeekdays {
+                    WeekdayPicker(selection: Binding(
+                        get: { liveStreak?.scheduledWeekdays ?? [] },
+                        set: { newDays in
+                            guard let s = liveStreak else { return }
+                            store.setGoal(
+                                mode: .specificWeekdays,
+                                weekdays: newDays,
+                                periodTarget: s.periodTarget,
+                                for: s
+                            )
+                        }
+                    ))
+                }
+            case .multipleDaily:
+                Picker("Goal type", selection: Binding(
+                    get: { liveStreak?.goalMode ?? .countPerPeriod },
+                    set: { newMode in
+                        guard let s = liveStreak else { return }
+                        store.setGoal(
+                            mode: newMode,
+                            weekdays: s.scheduledWeekdays,
+                            periodTarget: s.periodTarget,
+                            for: s
+                        )
+                    }
+                )) {
+                    Text("Every day").tag(GoalMode.countPerPeriod)
+                    Text("Specific days").tag(GoalMode.specificWeekdays)
+                }
+
+                if streak.goalMode == .specificWeekdays {
+                    WeekdayPicker(selection: Binding(
+                        get: { liveStreak?.scheduledWeekdays ?? [] },
+                        set: { newDays in
+                            guard let s = liveStreak else { return }
+                            store.setGoal(
+                                mode: .specificWeekdays,
+                                weekdays: newDays,
+                                periodTarget: s.periodTarget,
+                                for: s
+                            )
+                        }
+                    ))
+                }
+
+                Stepper(
+                    "Times per day: \(streak.dailyTarget)",
+                    value: Binding(
+                        get: { liveStreak?.dailyTarget ?? 1 },
+                        set: { store.setDailyTarget($0, for: streak) }
+                    ),
+                    in: 1...50
+                )
+            case .weekly:
+                Picker("Goal type", selection: Binding(
+                    get: { liveStreak?.goalMode ?? .countPerPeriod },
+                    set: { newMode in
+                        guard let s = liveStreak else { return }
+                        store.setGoal(
+                            mode: newMode,
+                            weekdays: s.scheduledWeekdays,
+                            periodTarget: s.periodTarget,
+                            for: s
+                        )
+                    }
+                )) {
+                    Text("Days per week").tag(GoalMode.countPerPeriod)
+                    Text("Specific days").tag(GoalMode.specificWeekdays)
                 }
 
                 if streak.goalMode == .specificWeekdays {
@@ -337,7 +398,7 @@ struct StreakCardSettingsSheet: View {
                     ))
                 } else {
                     Stepper(
-                        "\(streak.type == .weekly ? "Days per week" : "Days per month"): \(streak.periodTarget)",
+                        "Days per week: \(streak.periodTarget)",
                         value: Binding(
                             get: { liveStreak?.periodTarget ?? 1 },
                             set: { newTarget in
@@ -350,16 +411,53 @@ struct StreakCardSettingsSheet: View {
                                 )
                             }
                         ),
-                        in: 1...(streak.type == .weekly ? 7 : 31)
+                        in: 1...7
                     )
                 }
-            case .daily:
-                EmptyView()
+            case .monthly:
+                Stepper(
+                    "Times per month: \(streak.periodTarget)",
+                    value: Binding(
+                        get: { liveStreak?.periodTarget ?? 1 },
+                        set: { newTarget in
+                            guard let s = liveStreak else { return }
+                            store.setGoal(
+                                mode: .countPerPeriod,
+                                weekdays: s.scheduledWeekdays,
+                                periodTarget: newTarget,
+                                for: s
+                            )
+                        }
+                    ),
+                    in: 1...31
+                )
             }
         } header: {
             Text("Goal — \(streak.type.displayName)")
         } footer: {
             Text("Changing the goal re-evaluates past days against the new goal. The streak type itself can't be changed after creation.")
+        }
+    }
+
+    // MARK: - Forgotten-day behavior
+
+    @ViewBuilder
+    private func missBehaviorSection(streak: Streak) -> some View {
+        Section {
+            Picker("If a day goes unmarked", selection: Binding(
+                get: { liveStreak?.missBehavior ?? .default },
+                set: { store.setMissBehavior($0, for: streak) }
+            )) {
+                ForEach(MissBehavior.allCases) { behavior in
+                    Text(behavior.displayName).tag(behavior)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } header: {
+            Text("When you forget")
+        } footer: {
+            Text("Leave blank keeps past unmarked days empty (and flagged). Auto-mark not done counts them as a miss; Auto-mark done fills them in so a slip doesn't break your streak. Days left blank or on Neutral are filled, and switching back to Leave blank undoes it.")
         }
     }
 
@@ -380,7 +478,7 @@ struct StreakCardSettingsSheet: View {
                 )
                 statRow(
                     label: "Days done",
-                    value: "\(store.doneDayCount(for: streak)) done / \(store.daysSinceCreation(for: streak)) days"
+                    value: "\(store.doneDayCount(for: streak)) done / \(store.activeDaysSinceCreation(for: streak)) days"
                 )
             case .multipleDaily:
                 statRow(
@@ -389,7 +487,7 @@ struct StreakCardSettingsSheet: View {
                 )
                 statRow(
                     label: "Days target met",
-                    value: "\(streak.targetMetDayCount) / \(store.daysSinceCreation(for: streak)) days"
+                    value: "\(streak.targetMetDayCount) / \(store.activeDaysSinceCreation(for: streak)) days"
                 )
                 statRow(
                     label: "Current streak",
