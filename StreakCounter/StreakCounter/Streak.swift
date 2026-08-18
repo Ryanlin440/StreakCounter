@@ -321,6 +321,56 @@ extension Streak {
     }
 }
 
+// MARK: - Auto-fill
+// On the model (not StreakStore) so the widget can apply the fill to a copy
+// at render time: its just-past-midnight timeline entry then shows the new
+// day exactly as the app will once it's opened and persists the real fill.
+extension Streak {
+
+    /// Fill every elapsed, still-blank, active day per `missBehavior` and
+    /// return the day keys that were filled (the store records them so the
+    /// fill can be undone). Only fully-blank days are touched, so manual
+    /// progress is never overwritten. Does nothing for `.default`.
+    @discardableResult
+    mutating func applyAutoFill(asOf now: Date, calendar: Calendar = .current) -> [String] {
+        guard missBehavior != .default else { return [] }
+        let today = calendar.startOfDay(for: now)
+        var day = calendar.startOfDay(for: startDate)
+        let doneDays = Set(completedDates.map { calendar.startOfDay(for: $0) })
+        var filled: [String] = []
+        while day < today {
+            let key = Streak.dateKey(day)
+            // A day left on Neutral counts as unmarked, so it's eligible to
+            // be auto-filled just like a never-touched blank day. A day with
+            // a real completion is never blank, even if it has no status
+            // (legacy data recorded completions only) — filling it would let
+            // the auto-fill undo erase the completion later.
+            let status = dayStatuses[key]
+            let isBlank = (status == nil || status == .neutral)
+                && dayCounts[key] == nil
+                && !doneDays.contains(day)
+            if isBlank, isActive(on: day, calendar: calendar) {
+                switch missBehavior {
+                case .autoMiss:
+                    dayStatuses[key] = .notDone
+                case .autoDone:
+                    dayStatuses[key] = .done
+                    completedDates.append(day)
+                    if type == .multipleDaily {
+                        dayCounts[key] = dailyTarget
+                    }
+                case .default:
+                    break
+                }
+                filled.append(key)
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return filled
+    }
+}
+
 // MARK: - Scheduling & period math
 // Kept on the model (like the streak math above) so the widget extension
 // can compute progress for every streak type without the store.
@@ -348,12 +398,16 @@ extension Streak {
         return scheduledWeekdays.contains(calendar.component(.weekday, from: date))
     }
 
-    /// The week or month containing `date`. Weeks follow the user's locale
-    /// (Calendar.current.firstWeekday); months handle 28–31 days and leap
-    /// years via Calendar. nil for day-based streak types.
+    /// The week or month containing `date`. Weeks always run Monday through
+    /// Sunday regardless of locale, so a 7/7 week fills from Monday to the
+    /// following Sunday; months handle 28–31 days and leap years via
+    /// Calendar. nil for day-based streak types.
     func periodInterval(containing date: Date, calendar: Calendar = .current) -> DateInterval? {
         switch type {
-        case .weekly: return calendar.dateInterval(of: .weekOfYear, for: date)
+        case .weekly:
+            var mondayFirst = calendar
+            mondayFirst.firstWeekday = 2
+            return mondayFirst.dateInterval(of: .weekOfYear, for: date)
         case .monthly: return calendar.dateInterval(of: .month, for: date)
         case .daily, .multipleDaily: return nil
         }

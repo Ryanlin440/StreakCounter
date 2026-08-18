@@ -28,8 +28,9 @@ struct StreakCardView: View {
     private var scale: CGFloat {
         // Grid cards are half-width, so the largest full-width sizes smush the
         // title and numbers. Cap the base size in the grid layout before
-        // applying the compact multiplier.
-        let base = compact ? min(store.cardSize, 1.35) : store.cardSize
+        // applying the compact multiplier. Full-width cards cap at 1.45 so
+        // they don't grow past the point of looking oversized.
+        let base = compact ? min(store.cardSize, 1.35) : min(store.cardSize, 1.45)
         return CGFloat(base) * (compact ? 0.85 : 1.0)
     }
 

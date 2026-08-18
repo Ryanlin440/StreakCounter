@@ -3,8 +3,10 @@
 //  StreakWidget
 //
 //  Home-screen widgets showing streak progress. Small shows one streak
-//  (chosen by long-pressing the widget and editing it), medium adds a couple
-//  more, and large lists several. Tapping a widget opens the app.
+//  (chosen by long-pressing the widget and editing it), medium adds two
+//  more, and large lists six. The extra slots can also be hand-picked via
+//  "More Streaks" in the widget's edit screen; left empty they fill from
+//  the top of the main page. Tapping a widget opens the app.
 //
 
 import WidgetKit
@@ -47,11 +49,17 @@ struct StreakEntityQuery: EntityQuery {
 }
 
 struct SelectStreakIntent: WidgetConfigurationIntent {
-    static var title: LocalizedStringResource = "Choose Streak"
-    static var description = IntentDescription("Choose which streak the widget shows.")
+    static var title: LocalizedStringResource = "Choose Streaks"
+    static var description = IntentDescription("Choose which streaks the widget shows.")
 
     @Parameter(title: "Streak")
     var streak: StreakEntity?
+
+    /// Streaks shown alongside the main one on medium (2 slots) and large
+    /// (5 slots) widgets, in the order picked here. Leave empty to fill
+    /// automatically from the top of the main page.
+    @Parameter(title: "More Streaks (Medium/Large)")
+    var moreStreaks: [StreakEntity]?
 }
 
 // MARK: - Timeline
@@ -165,7 +173,14 @@ struct StreakWidgetProvider: AppIntentTimelineProvider {
     }
 
     private func entry(for configuration: SelectStreakIntent, at date: Date) -> StreakWidgetEntry {
-        let streaks = SharedStreakData.read()
+        // Apply each streak's miss behavior for the entry's date, so the
+        // just-past-midnight entry auto-fills the day that elapsed and shows
+        // the new day's reset exactly as the app will once it's opened.
+        let streaks = SharedStreakData.read().map { streak in
+            var filled = streak
+            filled.applyAutoFill(asOf: date)
+            return filled
+        }
         // Same category order as the app's main page.
         let ordered = StreakType.displayOrder.flatMap { type in
             streaks.filter { $0.type == type }
@@ -176,9 +191,16 @@ struct StreakWidgetProvider: AppIntentTimelineProvider {
         guard let chosen else {
             return StreakWidgetEntry(date: date, primary: nil, others: [])
         }
-        let others = ordered
-            .filter { $0.id != chosen.id }
-            .map { WidgetStreakInfo.from($0, at: date) }
+        // Hand-picked companions keep the user's order; an empty list falls
+        // back to filling from the top of the main page.
+        let picked = (configuration.moreStreaks ?? []).compactMap { entity in
+            streaks.first { $0.id.uuidString == entity.id }
+        }
+        var seen: Set<UUID> = [chosen.id]
+        let companions = picked.isEmpty
+            ? ordered.filter { $0.id != chosen.id }
+            : picked.filter { seen.insert($0.id).inserted }
+        let others = companions.map { WidgetStreakInfo.from($0, at: date) }
         return StreakWidgetEntry(
             date: date,
             primary: WidgetStreakInfo.from(chosen, at: date),

@@ -183,6 +183,11 @@ class StreakStore: ObservableObject {
         // Convert any legacy monthly + specific-weekday cards arriving from
         // another device / older app version.
         _ = Self.migrateTypeChanges(&self.streaks)
+        // Re-derive the auto-fill on top of the fresh remote data, replacing
+        // any fill computed earlier from a stale local cache.
+        for i in streaks.indices {
+            resolveAutoFill(at: i)
+        }
         self.cardSize = snapshot.cardSize
         self.backgroundColor = snapshot.backgroundColor
         if let times = snapshot.reminderTimes {
@@ -525,14 +530,22 @@ class StreakStore: ObservableObject {
     }
 
     /// Re-apply auto-fill for every streak. Idempotent — safe to call on
-    /// launch and whenever the day rolls over. Saves (and syncs) only if a
-    /// streak's filled set actually changed, to avoid needless cloud writes.
+    /// launch and whenever the day rolls over. Persists locally only if a
+    /// streak's filled set actually changed. Never pushes to the cloud:
+    /// launch/foreground run this against the local cache, which can be
+    /// days behind Firestore, and pushing stale data auto-filled as missed
+    /// would overwrite the real history (last write wins). The fill is
+    /// derived state — every device recomputes the same fill from the
+    /// synced data — so the next real edit pushing it along is enough.
     func applyAutoFillForAll(asOf now: Date = Date()) {
         var changed = false
         for i in streaks.indices {
             if resolveAutoFill(at: i, asOf: now) { changed = true }
         }
-        if changed { save() }
+        if changed {
+            persistStreaksLocally()
+            refreshNotifications()
+        }
     }
 
     /// Undo the streak's previous auto-fill, then, unless the behavior is
@@ -546,10 +559,14 @@ class StreakStore: ObservableObject {
         let previous = streaks[index].autoFilledDates
 
         // 1. Revert the prior fill so re-runs and behavior changes are clean.
+        // Only a day auto-marked Done ever added a completedDates entry, so
+        // only that case removes one — an auto-missed day must never take a
+        // real (pre-existing) completion down with it.
         for key in previous {
+            let wasAutoDone = streaks[index].dayStatuses[key] == .done
             streaks[index].dayStatuses[key] = nil
             streaks[index].dayCounts[key] = nil
-            if let date = Streak.date(fromKey: key) {
+            if wasAutoDone, let date = Streak.date(fromKey: key) {
                 streaks[index].completedDates.removeAll {
                     calendar.isDate($0, inSameDayAs: date)
                 }
@@ -557,43 +574,13 @@ class StreakStore: ObservableObject {
         }
         streaks[index].autoFilledDates = []
 
-        // 2. Re-fill for the current behavior. Applies to every streak type:
-        // day-based cards fill each blank active day, and count-per-period
-        // cards fill every blank day (which can over-count, by design).
-        let behavior = streaks[index].missBehavior
-        if behavior != .default {
-            let today = calendar.startOfDay(for: now)
-            var day = calendar.startOfDay(for: streaks[index].startDate)
-            var filled: [String] = []
-            while day < today {
-                let key = Streak.dateKey(day)
-                // A day left on Neutral counts as unmarked, so it's eligible to
-                // be auto-filled just like a never-touched blank day.
-                let status = streaks[index].dayStatuses[key]
-                let isBlank = (status == nil || status == .neutral)
-                    && streaks[index].dayCounts[key] == nil
-                if isBlank, streaks[index].isActive(on: day) {
-                    switch behavior {
-                    case .autoMiss:
-                        streaks[index].dayStatuses[key] = .notDone
-                    case .autoDone:
-                        streaks[index].dayStatuses[key] = .done
-                        streaks[index].completedDates.append(day)
-                        if streaks[index].type == .multipleDaily {
-                            streaks[index].dayCounts[key] = streaks[index].dailyTarget
-                        }
-                    case .default:
-                        break
-                    }
-                    filled.append(key)
-                }
-                guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
-                day = next
-            }
-            streaks[index].autoFilledDates = filled
-        }
+        // 2. Re-fill for the current behavior (shared with the widget via
+        // Streak.applyAutoFill). Applies to every streak type: day-based
+        // cards fill each blank active day, and count-per-period cards fill
+        // every blank day (which can over-count, by design).
+        streaks[index].autoFilledDates = streaks[index].applyAutoFill(asOf: now, calendar: calendar)
 
-        if behavior == .autoDone {
+        if streaks[index].missBehavior == .autoDone {
             unlockMilestonesIfNeeded(at: index)
         }
         return streaks[index].autoFilledDates != previous
