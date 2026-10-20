@@ -28,6 +28,11 @@ struct StreakCardSettingsSheet: View {
     /// store while the sheet is presenting re-renders the Form mid-animation
     /// and makes the first tap unreliable.
     @State private var pendingOpenedMessageID: UUID?
+    /// Debounce handles so typing in the name/notes fields doesn't save on
+    /// every keystroke. Each save JSON-encodes every streak, pushes to
+    /// Firestore, and reschedules notifications, which makes typing stutter.
+    @State private var nameSaveTask: Task<Void, Never>?
+    @State private var notesSaveTask: Task<Void, Never>?
 
     init(streakID: UUID, store: StreakStore) {
         self.streakID = streakID
@@ -177,6 +182,9 @@ struct StreakCardSettingsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Close") {
+                        // Flush any pending debounced save immediately.
+                        nameSaveTask?.cancel()
+                        notesSaveTask?.cancel()
                         saveName()
                         saveNotes()
                         dismiss()
@@ -185,10 +193,20 @@ struct StreakCardSettingsSheet: View {
                 }
             }
             .onChange(of: nameDraft) { _, _ in
-                saveName()
+                nameSaveTask?.cancel()
+                nameSaveTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(600))
+                    if Task.isCancelled { return }
+                    saveName()
+                }
             }
             .onChange(of: notesDraft) { _, _ in
-                saveNotes()
+                notesSaveTask?.cancel()
+                notesSaveTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(600))
+                    if Task.isCancelled { return }
+                    saveNotes()
+                }
             }
             .onChange(of: selectedPhoto) { _, newValue in
                 Task {

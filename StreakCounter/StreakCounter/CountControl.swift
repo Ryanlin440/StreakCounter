@@ -36,14 +36,19 @@ struct CountControl: View {
                         .font(.system(size: 17 * scale, weight: .bold))
                         .foregroundColor(isComplete ? Color(.systemGreen) : textColor)
                         .contentTransition(.numericText())
-                    Text("/ \(target)")
-                        .font(.system(size: 13 * scale, weight: .semibold))
-                        .foregroundColor(textColor.opacity(0.6))
                     if isComplete {
+                        // Target reached: drop the "/ target" so the count and
+                        // checkmark stay full-size. Showing all three plus the
+                        // checkmark made minimumScaleFactor shrink the numbers
+                        // to the point they looked like they vanished.
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 14 * scale))
                             .foregroundColor(Color(.systemGreen))
                             .transition(.scale.combined(with: .opacity))
+                    } else {
+                        Text("/ \(target)")
+                            .font(.system(size: 13 * scale, weight: .semibold))
+                            .foregroundColor(textColor.opacity(0.6))
                     }
                 }
                 // Shrink rather than clip when the control gets narrow, so
