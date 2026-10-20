@@ -25,6 +25,15 @@ Package.resolved
 # macOS
 .DS_Store
 
+# Firebase / secrets (keep out of the public repo)
+GoogleService-Info.plist
+
+# Signing
+*.mobileprovision
+*.p12
+*.cer
+*.certSigningRequest
+
 # Misc
 *.swp
 *.swo
