@@ -388,6 +388,39 @@ extension Streak {
         dayNotes[Streak.dateKey(date)]
     }
 
+    /// The earliest day the streak has real history on: its start date, or
+    /// an earlier day the user backfilled from the calendar (an explicit
+    /// Done/Not Done, or a recorded completion). Period math anchors here
+    /// instead of `startDate` so weekly/monthly streaks pick up edits to
+    /// pre-creation days the same way the day-based types already do.
+    func historyStartDay(calendar: Calendar = .current) -> Date {
+        var earliest = calendar.startOfDay(for: startDate)
+        for date in completedDates {
+            let day = calendar.startOfDay(for: date)
+            if day < earliest { earliest = day }
+        }
+        for (key, status) in dayStatuses where status == .done || status == .notDone {
+            if let date = Streak.date(fromKey: key) {
+                let day = calendar.startOfDay(for: date)
+                if day < earliest { earliest = day }
+            }
+        }
+        return earliest
+    }
+
+    /// Lower bound for a period's required days. Periods from creation
+    /// onward clamp to the start date — a streak created mid-week is never
+    /// penalized for pre-creation days it was never asked to do, even after
+    /// earlier days are backfilled. Periods entirely before creation exist
+    /// only through backfilled history, so they clamp to its earliest day.
+    private func requiredStartDay(for interval: DateInterval, calendar: Calendar) -> Date {
+        let creationDay = calendar.startOfDay(for: startDate)
+        if interval.end <= creationDay {
+            return historyStartDay(calendar: calendar)
+        }
+        return creationDay
+    }
+
     /// Whether the streak can be interacted with on this date. Any streak
     /// with a specific-day schedule (daily, multiple times a day, weekly)
     /// has off-days; everything else is always active.
@@ -432,10 +465,11 @@ extension Streak {
     /// Days that must be Done for the period to count as complete.
     /// The period containing `startDate` only requires days on or after it,
     /// so a streak created mid-week isn't penalized for days that never
-    /// applied to it.
+    /// applied to it. Periods before creation that the user backfilled from
+    /// the calendar get a real requirement too, so they can count.
     func requiredCount(in interval: DateInterval, calendar: Calendar = .current) -> Int {
         guard isPeriodBased else { return 0 }
-        let firstDay = calendar.startOfDay(for: startDate)
+        let firstDay = requiredStartDay(for: interval, calendar: calendar)
         let clampedStart = max(calendar.startOfDay(for: interval.start), firstDay)
         guard clampedStart < interval.end else { return 0 }
 
@@ -500,7 +534,7 @@ extension Streak {
     func isPeriodStillAchievable(containing date: Date, asOf now: Date = Date(), calendar: Calendar = .current) -> Bool {
         guard let interval = periodInterval(containing: date, calendar: calendar) else { return false }
         let today = calendar.startOfDay(for: now)
-        let firstDay = calendar.startOfDay(for: startDate)
+        let firstDay = requiredStartDay(for: interval, calendar: calendar)
         let clampedStart = max(calendar.startOfDay(for: interval.start), firstDay)
 
         switch goalMode {
@@ -535,8 +569,9 @@ extension Streak {
     func currentPeriodStreak(asOf now: Date = Date(), calendar: Calendar = .current) -> Int {
         guard isPeriodBased,
               let current = periodInterval(containing: now, calendar: calendar) else { return 0 }
-        let firstPeriodStart = periodInterval(containing: startDate, calendar: calendar)?.start
-            ?? calendar.startOfDay(for: startDate)
+        let historyStart = historyStartDay(calendar: calendar)
+        let firstPeriodStart = periodInterval(containing: historyStart, calendar: calendar)?.start
+            ?? historyStart
 
         var count = 0
         var interval = current
@@ -565,7 +600,8 @@ extension Streak {
     func longestPeriodStreak(asOf now: Date = Date(), calendar: Calendar = .current) -> Int {
         guard isPeriodBased,
               let current = periodInterval(containing: now, calendar: calendar),
-              var interval = periodInterval(containing: startDate, calendar: calendar) else { return 0 }
+              var interval = periodInterval(containing: historyStartDay(calendar: calendar),
+                                            calendar: calendar) else { return 0 }
 
         var longest = 0
         var run = 0
@@ -616,12 +652,12 @@ extension Streak {
         }
     }
 
-    /// Scheduled weekdays as "Mon · Wed · Fri", ordered from the locale's
-    /// first weekday.
+    /// Scheduled weekdays as "Mon · Wed · Fri", ordered Monday-first to
+    /// match the app's Monday-based weeks.
     var scheduledWeekdaysDescription: String {
         let calendar = Calendar.current
         let symbols = calendar.shortWeekdaySymbols
-        let first = calendar.firstWeekday
+        let first = 2 // Monday, regardless of locale
         let ordered = scheduledWeekdays
             .filter { (1...7).contains($0) }
             .sorted { (($0 - first + 7) % 7) < (($1 - first + 7) % 7) }

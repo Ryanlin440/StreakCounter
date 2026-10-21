@@ -7,13 +7,13 @@ import SwiftUI
 
 /// A row of tappable weekday chips for choosing a specific-weekday schedule.
 /// Works in Calendar weekday numbers (1 = Sunday … 7 = Saturday) and shows
-/// days ordered from the locale's first weekday.
+/// days ordered Monday-first, matching the app's Monday-based weeks.
 struct WeekdayPicker: View {
 
     @Binding var selection: [Int]
 
     private var orderedWeekdays: [Int] {
-        let first = Calendar.current.firstWeekday
+        let first = 2 // Monday, regardless of locale
         return (0..<7).map { ((first - 1 + $0) % 7) + 1 }
     }
 
